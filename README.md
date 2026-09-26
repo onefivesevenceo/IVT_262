@@ -94,11 +94,11 @@ CapitalTracker — учетно-аналитический веб-сервис. 
 
 ```mermaid
 graph TD
-    subgraph Сеть Абонента
+    subgraph ClientNet ["Сеть Абонента"]
         A[Веб-браузер Пользователя]
     end
 
-    subgraph Docker Compose Окружение (ИВТ-262)
+    subgraph DockerEnv ["Docker Compose Окружение (ИВТ-262)"]
         C[Frontend / Шаблоны Jinja2]
         D[FastAPI Backend Container]
         E[(PostgreSQL 15 Container)]
