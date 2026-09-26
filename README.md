@@ -92,21 +92,20 @@ CapitalTracker — учетно-аналитический веб-сервис. 
 **3.3 Архитектура КПС**
 Применяется классическая трехзвенная архитектура. Клиент использует HTML5, Bootstrap 5, Vanilla JavaScript и Chart.js. Сервер маршрутизирует запросы через FastAPI. Хранилище реализовано на базе SQLAlchemy с использованием PostgreSQL для целевого режима развертывания.
 
-```mermaid
-graph TD
-    subgraph Сеть Абонента
-        A[Веб-браузер Пользователя]
+```flowchart TD
+    subgraph ClientNet ["Сеть Абонента"]
+        A["Веб-браузер Пользователя"]
     end
 
-    subgraph Docker Compose Окружение (ИВТ-262)
-        C[Frontend / Шаблоны Jinja2]
-        D[FastAPI Backend Container]
-        E[(PostgreSQL 15 Container)]
+    subgraph DockerEnv ["Docker Compose Окружение (ИВТ-262)"]
+        C["Frontend / Шаблоны Jinja2"]
+        D["FastAPI Backend Container"]
+        E[("PostgreSQL 15 Container")]
     end
 
-    A -- HTTP/HTTPS --> C
-    C -- REST API / JSON --> D
-    D -- SQLAlchemy ORM / TCP 5432 --> E
+    A -->|"HTTP / HTTPS"| C
+    C -->|"REST API / JSON"| D
+    D -->|"SQLAlchemy ORM / TCP 5432"| E
 ```
 *Рисунок 1. Архитектура программной системы CapitalTracker*
 
