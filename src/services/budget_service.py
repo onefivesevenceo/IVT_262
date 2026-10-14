@@ -64,7 +64,7 @@ class BudgetService:
             Decimal("0.00"),
         )
 
-        ratio = (spent / budget.limit_amount) * Decimal("100")
+        ratio = (spent / budget.limit_amount) * Decimal(100)
 
         if ratio < Decimal("80.0"):
             indicator = "GREEN (Штатный режим)"

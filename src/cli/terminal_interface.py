@@ -122,9 +122,7 @@ class TerminalInterface:
         raw_balance = input("Введите начальный остаток: ").strip()
         try:
             balance = Decimal(raw_balance)
-            acc = self._acc_svc.create_account(
-                self._user_id, name, acc_type, balance
-            )
+            acc = self._acc_svc.create_account(self._user_id, name, acc_type, balance)
             print(
                 f"[OK] Счет '{acc.name}' успешно открыт с балансом {acc.balance:.2f} руб."
             )
@@ -142,11 +140,7 @@ class TerminalInterface:
 
         print("Тип: 1. Расход, 2. Доход")
         t_choice = input("Выберите тип [1-2]: ").strip()
-        tx_type = (
-            TransactionType.EXPENSE
-            if t_choice == "1"
-            else TransactionType.INCOME
-        )
+        tx_type = TransactionType.EXPENSE if t_choice == "1" else TransactionType.INCOME
 
         categories = self._cat_repo.get_all_by_user(self._user_id)
         print("Доступные категории:")
@@ -227,9 +221,7 @@ class TerminalInterface:
             raw_lim = input("Лимит (руб): ").strip()
             try:
                 lim = Decimal(raw_lim)
-                self._bdg_svc.set_budget(
-                    self._user_id, cat_id, month, year, lim
-                )
+                self._bdg_svc.set_budget(self._user_id, cat_id, month, year, lim)
                 print("[OK] Лимит успешно установлен.")
             except (InvalidOperation, ValueError) as err:
                 print(f"[!] Ошибка: {err}")
@@ -238,9 +230,7 @@ class TerminalInterface:
                 spent, ratio, ind = self._bdg_svc.calculate_status(
                     self._user_id, cat_id, month, year
                 )
-                print(
-                    f"Потрачено: {spent:.2f} руб. ({ratio:.1f}%) | Статус: {ind}"
-                )
+                print(f"Потрачено: {spent:.2f} руб. ({ratio:.1f}%) | Статус: {ind}")
             except ValueError as err:
                 print(f"[!] {err}")
 
@@ -254,9 +244,7 @@ class TerminalInterface:
         tx_id = int(raw_tx_id)
         try:
             self._tx_svc.delete_transaction(tx_id, self._user_id)
-            print(
-                "[OK] Транзакция удалена, остаток счета автоматически восстановлен."
-            )
+            print("[OK] Транзакция удалена, остаток счета автоматически восстановлен.")
         except (ValueError, PermissionError) as err:
             print(f"[!] Ошибка: {err}")
 

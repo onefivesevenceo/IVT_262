@@ -113,22 +113,16 @@ class TransactionService:
             raise ValueError(msg)
 
         if tx.transaction_type == TransactionType.EXPENSE:
-            self._account_repo.update_balance(
-                account.id, account.balance + tx.amount
-            )
+            self._account_repo.update_balance(account.id, account.balance + tx.amount)
         elif tx.transaction_type == TransactionType.INCOME:
-            self._account_repo.update_balance(
-                account.id, account.balance - tx.amount
-            )
+            self._account_repo.update_balance(account.id, account.balance - tx.amount)
         elif tx.transaction_type == TransactionType.TRANSFER and tx.to_account_id:
             target = self._account_repo.get_by_id(tx.to_account_id)
             if target:
                 self._account_repo.update_balance(
                     account.id, account.balance + tx.amount
                 )
-                self._account_repo.update_balance(
-                    target.id, target.balance - tx.amount
-                )
+                self._account_repo.update_balance(target.id, target.balance - tx.amount)
 
         self._tx_repo.delete(transaction_id)
 

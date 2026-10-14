@@ -24,15 +24,17 @@ class ExportService:
         output = io.StringIO()
         writer = csv.writer(output, delimiter=";", quoting=csv.QUOTE_MINIMAL)
 
-        writer.writerow([
-            "ID",
-            "Дата и время",
-            "Тип операции",
-            "Счет списания",
-            "Счет зачисления",
-            "Категория",
-            "Сумма (руб)",
-        ])
+        writer.writerow(
+            [
+                "ID",
+                "Дата и время",
+                "Тип операции",
+                "Счет списания",
+                "Счет зачисления",
+                "Категория",
+                "Сумма (руб)",
+            ]
+        )
 
         for tx in transactions:
             account = self._account_repo.get_by_id(tx.account_id)
@@ -48,14 +50,16 @@ class ExportService:
                 category = self._category_repo.get_by_id(tx.category_id)
                 category_name = category.name if category else "-"
 
-            writer.writerow([
-                tx.id,
-                tx.timestamp.strftime("%Y-%m-%d %H:%M:%S"),
-                tx.transaction_type.value,
-                account_name,
-                target_name,
-                category_name,
-                f"{tx.amount:.2f}",
-            ])
+            writer.writerow(
+                [
+                    tx.id,
+                    tx.timestamp.strftime("%Y-%m-%d %H:%M:%S"),
+                    tx.transaction_type.value,
+                    account_name,
+                    target_name,
+                    category_name,
+                    f"{tx.amount:.2f}",
+                ]
+            )
 
         return output.getvalue()

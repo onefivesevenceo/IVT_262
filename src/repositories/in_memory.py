@@ -74,9 +74,7 @@ class InMemoryTransactionRepository:
 
     def get_all_by_user(self, user_id: int) -> list[Transaction]:
         """Возвращает список всех транзакций пользователя."""
-        return [
-            tx for tx in self._transactions.values() if tx.user_id == user_id
-        ]
+        return [tx for tx in self._transactions.values() if tx.user_id == user_id]
 
     def delete(self, transaction_id: int) -> None:
         """Удаляет операцию из словаря."""
