@@ -78,8 +78,7 @@ capital-tracker/
 ├── uv.lock
 ├── README.md
 ├── docs/
-│   ├── TZ_GOST_19.201-78.md
-│   └── architecture_c4.png
+│   └── laba_3.md
 └── src/
     ├── __init__.py
     ├── main.py                     <-- Минималистичная точка входа
