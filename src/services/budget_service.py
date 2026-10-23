@@ -2,19 +2,16 @@ from decimal import Decimal
 
 from src.models.budget import BudgetLimit
 from src.models.transaction import TransactionType
-from src.repositories.base import (
-    BudgetRepositoryProtocol,
-    TransactionRepositoryProtocol,
-)
+from src.repositories.base import BudgetRepository, TransactionRepository
 
 
 class BudgetService:
-    """Сервис контроля месячных бюджетов и индикации перерасходов."""
+    """Сервис контроля лимитов и расчета освоения бюджетов."""
 
     def __init__(
         self,
-        budget_repo: BudgetRepositoryProtocol,
-        tx_repo: TransactionRepositoryProtocol,
+        budget_repo: BudgetRepository,
+        tx_repo: TransactionRepository,
     ) -> None:
         self._budget_repo = budget_repo
         self._tx_repo = tx_repo
@@ -25,11 +22,11 @@ class BudgetService:
         category_id: int,
         month: int,
         year: int,
-        limit: Decimal,
+        limit_amount: Decimal,
     ) -> BudgetLimit:
-        """Устанавливает лимит расходов на месяц."""
-        if limit <= Decimal("0.00"):
-            msg = "Лимит бюджета обязан быть положительным числом."
+        """Устанавливает лимит бюджета на календарный месяц."""
+        if not limit_amount.is_finite() or limit_amount <= Decimal("0.00"):
+            msg = "Лимит бюджета обязан быть конечным положительным числом."
             raise ValueError(msg)
 
         budget = BudgetLimit(
@@ -38,24 +35,24 @@ class BudgetService:
             category_id=category_id,
             month=month,
             year=year,
-            limit_amount=limit,
+            limit_amount=limit_amount,
         )
         return self._budget_repo.set_limit(budget)
 
     def calculate_status(
         self, user_id: int, category_id: int, month: int, year: int
     ) -> tuple[Decimal, Decimal, str]:
-        """Рассчитывает фактический расход, процент освоения и цветовой индикатор."""
+        """Рассчитывает сумму расходов, процент освоения и цветовой статус."""
         budget = self._budget_repo.get_limit(user_id, category_id, month, year)
         if not budget:
-            msg = "Бюджет на данный период не установлен."
+            msg = "Бюджетный лимит на указанный период не установлен."
             raise ValueError(msg)
 
-        all_tx = self._tx_repo.get_all_by_user(user_id)
+        txs = self._tx_repo.get_all_by_user(user_id)
         spent = sum(
             (
                 tx.amount
-                for tx in all_tx
+                for tx in txs
                 if tx.category_id == category_id
                 and tx.transaction_type == TransactionType.EXPENSE
                 and tx.timestamp.month == month
@@ -64,13 +61,17 @@ class BudgetService:
             Decimal("0.00"),
         )
 
-        ratio = (spent / budget.limit_amount) * Decimal(100)
+        ratio = (
+            (spent / budget.limit_amount) * Decimal("100.0")
+            if budget.limit_amount > 0
+            else Decimal("0.0")
+        )
 
         if ratio < Decimal("80.0"):
             indicator = "GREEN (Штатный режим)"
-        elif Decimal("80.0") <= ratio <= Decimal("100.0"):
-            indicator = "YELLOW (Предупреждение)"
+        elif ratio <= Decimal("100.0"):
+            indicator = "YELLOW (Внимание, приближение к лимиту)"
         else:
-            indicator = "RED (Перерасход)"
+            indicator = "RED (Лимит превышен)"
 
         return spent, ratio, indicator

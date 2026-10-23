@@ -1,10 +1,12 @@
 from datetime import datetime
 from decimal import Decimal
 
+from src.models.category import CategoryDirection
 from src.models.transaction import Transaction, TransactionType
 from src.repositories.base import (
-    AccountRepositoryProtocol,
-    TransactionRepositoryProtocol,
+    AccountRepository,
+    CategoryRepository,
+    TransactionRepository,
 )
 
 
@@ -13,11 +15,13 @@ class TransactionService:
 
     def __init__(
         self,
-        tx_repo: TransactionRepositoryProtocol,
-        account_repo: AccountRepositoryProtocol,
+        tx_repo: TransactionRepository,
+        account_repo: AccountRepository,
+        category_repo: CategoryRepository | None = None,
     ) -> None:
         self._tx_repo = tx_repo
         self._account_repo = account_repo
+        self._category_repo = category_repo
 
     def register_transaction(
         self,
@@ -28,14 +32,40 @@ class TransactionService:
         category_id: int | None = None,
     ) -> Transaction:
         """Регистрирует приход/расход и пересчитывает баланс счета."""
-        if amount <= Decimal("0.00"):
-            msg = "Сумма операции обязана быть строго положительной."
+        if not amount.is_finite() or amount <= Decimal("0.00"):
+            msg = "Сумма операции обязана быть конечной и строго положительной."
             raise ValueError(msg)
 
         account = self._account_repo.get_by_id(account_id)
         if not account or account.user_id != user_id:
-            msg = "Указанный счет не существует или принадлежит другому пользователю."
+            msg = (
+                "Указанный счет не существует "
+                "или принадлежит другому пользователю."
+            )
             raise PermissionError(msg)
+
+        if category_id is not None and self._category_repo is not None:
+            category = self._category_repo.get_by_id(category_id)
+            if not category or category.user_id != user_id:
+                msg = (
+                    "Категория не найдена "
+                    "или принадлежит другому пользователю."
+                )
+                raise PermissionError(msg)
+
+            if (
+                tx_type == TransactionType.EXPENSE
+                and category.direction != CategoryDirection.EXPENSE
+            ):
+                msg = "Для операции расхода выбрана категория доходов."
+                raise ValueError(msg)
+
+            if (
+                tx_type == TransactionType.INCOME
+                and category.direction != CategoryDirection.INCOME
+            ):
+                msg = "Для операции дохода выбрана категория расходов."
+                raise ValueError(msg)
 
         if tx_type == TransactionType.EXPENSE:
             new_balance = account.balance - amount
@@ -66,8 +96,8 @@ class TransactionService:
         amount: Decimal,
     ) -> Transaction:
         """Выполняет межбалансовый перевод без изменения совокупного капитала."""
-        if amount <= Decimal("0.00"):
-            msg = "Сумма перевода обязана быть строго положительной."
+        if not amount.is_finite() or amount <= Decimal("0.00"):
+            msg = "Сумма перевода обязана быть конечной и строго положительной."
             raise ValueError(msg)
 
         if from_account_id == to_account_id:
@@ -113,16 +143,24 @@ class TransactionService:
             raise ValueError(msg)
 
         if tx.transaction_type == TransactionType.EXPENSE:
-            self._account_repo.update_balance(account.id, account.balance + tx.amount)
+            self._account_repo.update_balance(
+                account.id, account.balance + tx.amount
+            )
         elif tx.transaction_type == TransactionType.INCOME:
-            self._account_repo.update_balance(account.id, account.balance - tx.amount)
+            self._account_repo.update_balance(
+                account.id, account.balance - tx.amount
+            )
         elif tx.transaction_type == TransactionType.TRANSFER and tx.to_account_id:
             target = self._account_repo.get_by_id(tx.to_account_id)
-            if target:
-                self._account_repo.update_balance(
-                    account.id, account.balance + tx.amount
-                )
-                self._account_repo.update_balance(target.id, target.balance - tx.amount)
+            if not target:
+                msg = "Целевой счет перевода не найден для отката операции."
+                raise ValueError(msg)
+            self._account_repo.update_balance(
+                account.id, account.balance + tx.amount
+            )
+            self._account_repo.update_balance(
+                target.id, target.balance - tx.amount
+            )
 
         self._tx_repo.delete(transaction_id)
 

@@ -14,12 +14,19 @@ from src.repositories.in_memory import (
 )
 from src.services.account_service import AccountService
 from src.services.budget_service import BudgetService
+from src.services.category_service import CategoryService
 from src.services.export_service import ExportService
 from src.services.transaction_service import TransactionService
 
 
 def main() -> None:
-    """Инициализирует доменные сервисы и запускает рабочий цикл CLI."""
+    """Инициализирует доменные сервисы и запускает рабочий цикл CLI.
+
+    Примечание:
+    Значение user_id = 1 зафиксировано осознанно в качестве архитектурного
+    ограничения консольного прототипа ядра (MVP). Полноценная сессионная
+    многопользовательская авторизация вынесена в целевую веб-версию системы.
+    """
     user_id = 1
 
     account_repo = InMemoryAccountRepository()
@@ -28,7 +35,12 @@ def main() -> None:
     category_repo = InMemoryCategoryRepository()
 
     account_service = AccountService(account_repo)
-    transaction_service = TransactionService(transaction_repo, account_repo)
+    category_service = CategoryService(category_repo)
+    transaction_service = TransactionService(
+        tx_repo=transaction_repo,
+        account_repo=account_repo,
+        category_repo=category_repo,
+    )
     budget_service = BudgetService(budget_repo, transaction_repo)
     export_service = ExportService(account_repo, category_repo)
 
@@ -37,7 +49,7 @@ def main() -> None:
         account_service=account_service,
         tx_service=transaction_service,
         budget_service=budget_service,
-        category_repo=category_repo,
+        category_service=category_service,
         export_service=export_service,
     )
 

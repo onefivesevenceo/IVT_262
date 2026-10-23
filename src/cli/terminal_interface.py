@@ -2,11 +2,10 @@ from decimal import Decimal, InvalidOperation
 from enum import IntEnum
 
 from src.models.account import AccountType
-from src.models.category import Category, CategoryDirection
 from src.models.transaction import TransactionType
-from src.repositories.base import CategoryRepositoryProtocol
 from src.services.account_service import AccountService
 from src.services.budget_service import BudgetService
+from src.services.category_service import CategoryService
 from src.services.export_service import ExportService
 from src.services.transaction_service import TransactionService
 
@@ -52,22 +51,22 @@ class TerminalInterface:
         account_service: AccountService,
         tx_service: TransactionService,
         budget_service: BudgetService,
-        category_repo: CategoryRepositoryProtocol,
+        category_service: CategoryService,
         export_service: ExportService,
     ) -> None:
         self._user_id = user_id
         self._acc_svc = account_service
         self._tx_svc = tx_service
         self._bdg_svc = budget_service
-        self._cat_repo = category_repo
+        self._cat_svc = category_service
         self._exp_svc = export_service
 
     def run(self) -> None:
         """Главный цикл обработки команд терминала."""
-        self._seed_default_categories()
+        self._cat_svc.seed_defaults(self._user_id)
         while True:
             self._print_header()
-            choice = input("Выберите пункт меню [0-8]: ").strip()
+            choice = input("Выберите пункт меню [0-9]: ").strip()
 
             if choice == "1":
                 self._handle_show_accounts()
@@ -85,25 +84,13 @@ class TerminalInterface:
                 self._handle_delete_transaction()
             elif choice == "8":
                 self._handle_export_csv()
+            elif choice == "9":
+                self._handle_archive_account()
             elif choice == "0":
                 print("\nЗавершение сеанса. Данные сохранены.")
                 break
             else:
                 print("\n[!] Некорректный выбор. Повторите ввод.")
-
-    def _seed_default_categories(self) -> None:
-        """Инициализирует базовый набор категорий."""
-        existing = self._cat_repo.get_all_by_user(self._user_id)
-        if not existing:
-            self._cat_repo.add(
-                Category(0, self._user_id, "Продукты", CategoryDirection.EXPENSE)
-            )
-            self._cat_repo.add(
-                Category(0, self._user_id, "Кафе", CategoryDirection.EXPENSE)
-            )
-            self._cat_repo.add(
-                Category(0, self._user_id, "Зарплата", CategoryDirection.INCOME)
-            )
 
     def _print_header(self) -> None:
         """Отображает верхнюю информационную плашку."""
@@ -119,6 +106,7 @@ class TerminalInterface:
         print("6. Бюджеты и контроль лимитов")
         print("7. Удалить операцию (Откат остатка)")
         print("8. Экспорт журнала в CSV (Результат доработки)")
+        print("9. Заархивировать счет")
         print("0. Выход")
         print("-" * 55)
 
@@ -162,6 +150,9 @@ class TerminalInterface:
         raw_balance = input("Введите начальный остаток: ").strip()
         try:
             balance = Decimal(raw_balance)
+            if not balance.is_finite():
+                print("[!] Ошибка: баланс должен быть конечным числом.")
+                return
             acc = self._acc_svc.create_account(
                 self._user_id, name, acc_type, balance
             )
@@ -171,6 +162,20 @@ class TerminalInterface:
             )
         except InvalidOperation:
             print("[!] Ошибка: Некорректный формат денежной суммы.")
+
+    def _handle_archive_account(self) -> None:
+        """Диалог архивации счета."""
+        self._handle_show_accounts()
+        raw_id = input("Введите ID счета для архивации: ").strip()
+        if not raw_id.isdigit():
+            print("[!] Некорректный ID счета.")
+            return
+        acc_id = int(raw_id)
+        try:
+            self._acc_svc.archive_account(acc_id, self._user_id)
+            print(f"[OK] Счет ID {acc_id} успешно переведен в архив.")
+        except ValueError as err:
+            print(f"[!] Ошибка: {err}")
 
     def _handle_add_transaction(self) -> None:
         """Диалог регистрации дохода или расхода."""
@@ -185,7 +190,7 @@ class TerminalInterface:
         choice = self._read_choice("Выберите тип [1-2]: ", TransactionKindChoice)
         tx_type = choice.to_domain
 
-        categories = self._cat_repo.get_all_by_user(self._user_id)
+        categories = self._cat_svc.get_user_categories(self._user_id)
         print("Доступные категории:")
         for cat in categories:
             print(f"  [{cat.id}] {cat.name} ({cat.direction.value})")
@@ -255,7 +260,7 @@ class TerminalInterface:
             print("[!] Ошибка: номер месяца должен быть в диапазоне от 1 до 12.")
             return
 
-        categories = self._cat_repo.get_all_by_user(self._user_id)
+        categories = self._cat_svc.get_user_categories(self._user_id)
         for cat in categories:
             print(f"  [{cat.id}] {cat.name}")
         raw_cat = input("ID категории: ").strip()

@@ -1,8 +1,8 @@
 from dataclasses import dataclass
-from enum import Enum
+from enum import StrEnum
 
 
-class CategoryDirection(str, Enum):
+class CategoryDirection(StrEnum):
     """Направление финансовых потоков категории."""
 
     INCOME = "INCOME"

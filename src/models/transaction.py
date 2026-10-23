@@ -1,10 +1,10 @@
 from dataclasses import dataclass
 from datetime import datetime
 from decimal import Decimal
-from enum import Enum
+from enum import StrEnum
 
 
-class TransactionType(str, Enum):
+class TransactionType(StrEnum):
     """Тип проводимой финансовой операции."""
 
     INCOME = "INCOME"

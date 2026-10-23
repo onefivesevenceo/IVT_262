@@ -4,129 +4,161 @@ from src.models.account import Account
 from src.models.budget import BudgetLimit
 from src.models.category import Category
 from src.models.transaction import Transaction
+from src.repositories.base import (
+    AccountRepository,
+    BudgetRepository,
+    CategoryRepository,
+    TransactionRepository,
+)
 
 
-class InMemoryAccountRepository:
+class InMemoryAccountRepository(AccountRepository):
     """Хранилище счетов в оперативной памяти."""
 
     def __init__(self) -> None:
-        self._accounts: dict[int, Account] = {}
-        self._id_counter: int = 1
+        self._storage: dict[int, Account] = {}
+        self._seq = 1
 
     def add(self, account: Account) -> Account:
-        """Сохраняет счет и присваивает уникальный идентификатор."""
-        assigned_id = self._id_counter
-        self._id_counter += 1
-        account.id = assigned_id
-        self._accounts[assigned_id] = account
-        return account
+        """Добавляет счет в оперативную память."""
+        saved = Account(
+            id=self._seq,
+            user_id=account.user_id,
+            name=account.name,
+            account_type=account.account_type,
+            balance=account.balance,
+            is_archived=account.is_archived,
+        )
+        self._storage[self._seq] = saved
+        self._seq += 1
+        return saved
 
     def get_by_id(self, account_id: int) -> Account | None:
-        """Извлекает счет по ID."""
-        return self._accounts.get(account_id)
+        """Возвращает счет по его идентификатору."""
+        return self._storage.get(account_id)
 
     def get_all_by_user(self, user_id: int) -> list[Account]:
-        """Фильтрует счета по владельцу."""
+        """Возвращает все активные (не архивные) счета пользователя."""
         return [
             acc
-            for acc in self._accounts.values()
+            for acc in self._storage.values()
             if acc.user_id == user_id and not acc.is_archived
         ]
 
     def update_balance(self, account_id: int, new_balance: Decimal) -> None:
-        """Мутирует остаток на счете."""
-        if account := self._accounts.get(account_id):
-            account.balance = new_balance
+        """Обновляет остаток счета. Если счет не найден — бросает ошибку."""
+        account = self.get_by_id(account_id)
+        if not account:
+            msg = f"Счет с ID {account_id} не найден для обновления баланса."
+            raise ValueError(msg)
+        account.balance = new_balance
 
     def archive(self, account_id: int) -> None:
-        """Переводит счет в архивный статус."""
-        if account := self._accounts.get(account_id):
-            account.is_archived = True
+        """Помечает счет как архивный. Если счет не найден — бросает ошибку."""
+        account = self.get_by_id(account_id)
+        if not account:
+            msg = f"Счет с ID {account_id} не найден для архивации."
+            raise ValueError(msg)
+        account.is_archived = True
 
 
-class InMemoryTransactionRepository:
+class InMemoryTransactionRepository(TransactionRepository):
     """Хранилище транзакций в оперативной памяти."""
 
     def __init__(self) -> None:
-        self._transactions: dict[int, Transaction] = {}
-        self._id_counter: int = 1
+        self._storage: dict[int, Transaction] = {}
+        self._seq = 1
 
-    def add(self, transaction: Transaction) -> Transaction:
-        """Добавляет транзакцию с автогенерацией ключа."""
-        assigned_id = self._id_counter
-        self._id_counter += 1
-        stored_tx = Transaction(
-            id=assigned_id,
-            user_id=transaction.user_id,
-            transaction_type=transaction.transaction_type,
-            amount=transaction.amount,
-            account_id=transaction.account_id,
-            category_id=transaction.category_id,
-            timestamp=transaction.timestamp,
-            to_account_id=transaction.to_account_id,
+    def add(self, tx: Transaction) -> Transaction:
+        """Сохраняет транзакцию в памяти."""
+        saved = Transaction(
+            id=self._seq,
+            user_id=tx.user_id,
+            transaction_type=tx.transaction_type,
+            amount=tx.amount,
+            account_id=tx.account_id,
+            category_id=tx.category_id,
+            timestamp=tx.timestamp,
+            to_account_id=tx.to_account_id,
         )
-        self._transactions[assigned_id] = stored_tx
-        return stored_tx
+        self._storage[self._seq] = saved
+        self._seq += 1
+        return saved
 
-    def get_by_id(self, transaction_id: int) -> Transaction | None:
-        """Возвращает транзакцию по ID."""
-        return self._transactions.get(transaction_id)
+    def get_by_id(self, tx_id: int) -> Transaction | None:
+        """Возвращает транзакцию по ее номеру."""
+        return self._storage.get(tx_id)
 
     def get_all_by_user(self, user_id: int) -> list[Transaction]:
-        """Возвращает список всех транзакций пользователя."""
-        return [tx for tx in self._transactions.values() if tx.user_id == user_id]
+        """Возвращает историю операций пользователя."""
+        return [
+            tx
+            for tx in self._storage.values()
+            if tx.user_id == user_id
+        ]
 
-    def delete(self, transaction_id: int) -> None:
-        """Удаляет операцию из словаря."""
-        self._transactions.pop(transaction_id, None)
+    def delete(self, tx_id: int) -> None:
+        """Удаляет запись транзакции по первичному ключу."""
+        self._storage.pop(tx_id, None)
 
 
-class InMemoryBudgetRepository:
-    """Хранилище бюджетных лимитов в памяти."""
+class InMemoryBudgetRepository(BudgetRepository):
+    """Хранилище месячных лимитов бюджетов в оперативной памяти."""
 
     def __init__(self) -> None:
-        self._budgets: dict[tuple[int, int, int, int], BudgetLimit] = {}
-        self._id_counter: int = 1
+        self._storage: dict[str, BudgetLimit] = {}
+        self._seq = 1
 
     def set_limit(self, budget: BudgetLimit) -> BudgetLimit:
-        """Устанавливает лимит бюджета."""
-        key = (budget.user_id, budget.category_id, budget.month, budget.year)
-        budget.id = self._id_counter
-        self._id_counter += 1
-        self._budgets[key] = budget
-        return budget
+        """Устанавливает или перезаписывает лимит."""
+        key = f"{budget.user_id}:{budget.category_id}:{budget.month}:{budget.year}"
+        saved = BudgetLimit(
+            id=self._seq,
+            user_id=budget.user_id,
+            category_id=budget.category_id,
+            month=budget.month,
+            year=budget.year,
+            limit_amount=budget.limit_amount,
+        )
+        self._storage[key] = saved
+        self._seq += 1
+        return saved
 
     def get_limit(
         self, user_id: int, category_id: int, month: int, year: int
     ) -> BudgetLimit | None:
-        """Ищет лимит по составному ключу."""
-        return self._budgets.get((user_id, category_id, month, year))
+        """Возвращает лимит по ключу периода."""
+        key = f"{user_id}:{category_id}:{month}:{year}"
+        return self._storage.get(key)
 
 
-class InMemoryCategoryRepository:
-    """Хранилище категорий в памяти."""
+class InMemoryCategoryRepository(CategoryRepository):
+    """Хранилище категорий классификации операций в оперативной памяти."""
 
     def __init__(self) -> None:
-        self._categories: dict[int, Category] = {}
-        self._id_counter: int = 1
+        self._storage: dict[int, Category] = {}
+        self._seq = 1
 
     def add(self, category: Category) -> Category:
-        """Добавляет категорию."""
-        assigned_id = self._id_counter
-        self._id_counter += 1
-        stored = Category(
-            id=assigned_id,
+        """Добавляет категорию в память."""
+        saved = Category(
+            id=self._seq,
             user_id=category.user_id,
             name=category.name,
             direction=category.direction,
         )
-        self._categories[assigned_id] = stored
-        return stored
+        self._storage[self._seq] = saved
+        self._seq += 1
+        return saved
 
     def get_by_id(self, category_id: int) -> Category | None:
         """Возвращает категорию по ID."""
-        return self._categories.get(category_id)
+        return self._storage.get(category_id)
 
     def get_all_by_user(self, user_id: int) -> list[Category]:
-        """Возвращает категории пользователя."""
-        return [c for c in self._categories.values() if c.user_id == user_id]
+        """Возвращает список категорий пользователя."""
+        return [
+            cat
+            for cat in self._storage.values()
+            if cat.user_id == user_id
+        ]
