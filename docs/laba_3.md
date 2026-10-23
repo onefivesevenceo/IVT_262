@@ -43,6 +43,17 @@ dependencies = [
     "sqlalchemy>=2.0.0",
 ]
 
+[project.scripts]
+capital-tracker = "src.main:main"
+
+[build-system]
+requires = ["uv_build>=0.13.1,<0.14.0"]
+build-backend = "uv_build"
+
+[tool.uv.build-backend]
+module-name = "src"
+module-root = "."
+
 [dependency-groups]
 dev = [
     "mypy>=1.9.0",
@@ -94,15 +105,15 @@ capital-tracker/
     │   └── user.py                 <-- Модели пользователей
     ├── repositories/
     │   ├── __init__.py
-    │   ├── base.py                 <-- Абстрактные интерфейсы хранилища
+    │   ├── base.py                 <-- Абстрактные интерфейсы хранилища (ABC)
     │   └── in_memory.py            <-- Реализация репозиториев в памяти
     └── services/
         ├── __init__.py
         ├── account_service.py      <-- Бизнес-логика счетов
+        ├── category_service.py     <-- Бизнес-логика категорий и сидирования
         ├── transaction_service.py  <-- Бизнес-логика транзакций и переводов
         ├── budget_service.py       <-- Бизнес-логика лимитов и предупреждений
         └── export_service.py       <-- Реализация доработки: экспорт в CSV
-
 ```
 
 ---
@@ -112,23 +123,24 @@ capital-tracker/
 В архитектуре консольного прототипа соблюдены фундаментальные принципы объектно-ориентированного проектирования SOLID:
 
 1. **Single Responsibility Principle (SRP):**
-   * Каждый сервис решает изолированную задачу: `AccountService` управляет исключительно сальдо и архивацией, `TransactionService` контролирует создание и откат операций, `ExportService` отвечает исключительно за сериализацию данных в поток CSV.
+   * Каждый сервис решает изолированную задачу: `AccountService` управляет исключительно сальдо и архивацией, `CategoryService` изолирует работу со справочником категорий, `TransactionService` контролирует создание и откат операций, `ExportService` отвечает исключительно за сериализацию данных в поток CSV.
    * `TerminalInterface` изолирован от математики и бизнес-логики и отвечает только за форматирование вывода и чтение потока stdin.
 
 2. **Open/Closed Principle (OCP):**
-   * Все хранилища спроектированы через интерфейсы (Protocol / ABC). Поведение системы расширяется путем добавления нового репозитория (например, `PostgresRepository`) без изменения сервисного слоя.
+   * Все хранилища спроектированы через явные абстрактные базовые классы (`AccountRepository`, `TransactionRepository`, `CategoryRepository`, `BudgetRepository`). Поведение системы расширяется путем добавления нового репозитория (например, `PostgresRepository`) без изменения сервисного слоя.
 
 3. **Liskov Substitution Principle (LSP):**
    * Подклассы и реализации абстрактных репозиториев взаимозаменяемы. Замена In-Memory коллекций на постоянное хранилище не нарушает контракты сервисов.
 
 4. **Interface Segregation Principle (ISP):**
-   * Клиентские компоненты не зависят от методов, которые они не используют. Репозитории разделены по сущностям (`AccountRepositoryProtocol`, `TransactionRepositoryProtocol`).
+   * Клиентские компоненты не зависят от методов, которые они не используют. Репозитории разделены по сущностям (`AccountRepository`, `TransactionRepository`, `CategoryRepository`, `BudgetRepository`).
 
 5. **Dependency Inversion Principle (DIP):**
-   * Сервисы верхнего уровня зависят от абстракций (протоколов репозиториев), а не от конкретных реализаций in-memory словарей. Внедрение зависимостей происходит через конструкторы (`Dependency Injection`).
+   * Сервисы верхнего уровня зависят от абстракций (базовых классов репозиториев), а не от конкретных реализаций in-memory словарей. Внедрение зависимостей происходит через конструкторы (`Dependency Injection`).
 
 ### Обоснование контролируемого нарушения/компромисса
-* **Компромисс в реализации SRP внутри TransactionService:** Метод make_transfer в TransactionService напрямую мутирует балансы через AccountRepositoryProtocol, минуя доменные события. В микросервисной или распределенной архитектуре это должно быть разделено на распределенную сагу (Saga Pattern) или диспетчер доменных событий. В прототипе это сделано осознанно ради обеспечения строгой атомарности транзакции в локальной памяти без оверхеда на шину событий.
+* **Компромисс в реализации SRP внутри TransactionService:** Метод `make_transfer` в `TransactionService` напрямую мутирует балансы через `AccountRepository`, минуя доменные события. В микросервисной или распределенной архитектуре это должно быть разделено на распределенную сагу (Saga Pattern) или диспетчер доменных событий. В прототипе это сделано осознанно ради обеспечения строгой атомарности транзакции в локальной памяти без оверхеда на шину событий.
+
 ---
 
 ## 4. Исходный код программных компонентов
@@ -162,10 +174,10 @@ class User:
 ```python
 from dataclasses import dataclass
 from decimal import Decimal
-from enum import Enum
+from enum import StrEnum
 
 
-class AccountType(str, Enum):
+class AccountType(StrEnum):
     """Типы финансовых счетов."""
 
     DEBIT = "DEBIT"
@@ -189,10 +201,10 @@ class Account:
 #### `src/models/category.py`
 ```python
 from dataclasses import dataclass
-from enum import Enum
+from enum import StrEnum
 
 
-class CategoryDirection(str, Enum):
+class CategoryDirection(StrEnum):
     """Направление финансовых потоков категории."""
 
     INCOME = "INCOME"
@@ -214,10 +226,10 @@ class Category:
 from dataclasses import dataclass
 from datetime import datetime
 from decimal import Decimal
-from enum import Enum
+from enum import StrEnum
 
 
-class TransactionType(str, Enum):
+class TransactionType(StrEnum):
     """Тип проводимой финансовой операции."""
 
     INCOME = "INCOME"
@@ -261,8 +273,8 @@ class BudgetLimit:
 
 ### 4.2. Абстракции хранилищ (`src/repositories/base.py`)
 ```python
+from abc import ABC, abstractmethod
 from decimal import Decimal
-from typing import Protocol
 
 from src.models.account import Account
 from src.models.budget import BudgetLimit
@@ -270,78 +282,78 @@ from src.models.category import Category
 from src.models.transaction import Transaction
 
 
-class AccountRepositoryProtocol(Protocol):
-    """Контракт взаимодействия с хранилищем финансовых счетов."""
+class AccountRepository(ABC):
+    """Абстрактный контракт взаимодействия с хранилищем счетов."""
 
+    @abstractmethod
     def add(self, account: Account) -> Account:
         """Добавляет счет в хранилище."""
-        ...
 
+    @abstractmethod
     def get_by_id(self, account_id: int) -> Account | None:
         """Возвращает счет по его идентификатору."""
-        ...
 
+    @abstractmethod
     def get_all_by_user(self, user_id: int) -> list[Account]:
-        """Возвращает все счета пользователя."""
-        ...
+        """Возвращает все активные счета пользователя."""
 
+    @abstractmethod
     def update_balance(self, account_id: int, new_balance: Decimal) -> None:
         """Обновляет текущий остаток счета."""
-        ...
 
+    @abstractmethod
     def archive(self, account_id: int) -> None:
         """Помечает счет как архивный."""
-        ...
 
 
-class TransactionRepositoryProtocol(Protocol):
-    """Контракт взаимодействия с журналом транзакций."""
+class TransactionRepository(ABC):
+    """Абстрактный контракт взаимодействия с журналом транзакций."""
 
+    @abstractmethod
     def add(self, transaction: Transaction) -> Transaction:
         """Сохраняет новую транзакцию."""
-        ...
 
+    @abstractmethod
     def get_by_id(self, transaction_id: int) -> Transaction | None:
         """Возвращает транзакцию по идентификатору."""
-        ...
 
+    @abstractmethod
     def get_all_by_user(self, user_id: int) -> list[Transaction]:
         """Возвращает все операции конкретного пользователя."""
-        ...
 
+    @abstractmethod
     def delete(self, transaction_id: int) -> None:
         """Удаляет операцию из журнала."""
-        ...
 
 
-class BudgetRepositoryProtocol(Protocol):
-    """Контракт управления лимитами бюджетов."""
+class BudgetRepository(ABC):
+    """Абстрактный контракт управления лимитами бюджетов."""
 
+    @abstractmethod
     def set_limit(self, budget: BudgetLimit) -> BudgetLimit:
         """Устанавливает или обновляет лимит."""
-        ...
 
+    @abstractmethod
     def get_limit(
         self, user_id: int, category_id: int, month: int, year: int
     ) -> BudgetLimit | None:
         """Возвращает лимит на указанный период."""
-        ...
 
 
-class CategoryRepositoryProtocol(Protocol):
-    """Контракт управления справочником категорий."""
+class CategoryRepository(ABC):
+    """Абстрактный контракт управления справочником категорий."""
 
+    @abstractmethod
     def add(self, category: Category) -> Category:
         """Добавляет категорию."""
-        ...
 
+    @abstractmethod
     def get_by_id(self, category_id: int) -> Category | None:
         """Возвращает категорию по ID."""
-        ...
 
+    @abstractmethod
     def get_all_by_user(self, user_id: int) -> list[Category]:
         """Возвращает список категорий пользователя."""
-        ...
 ```
 
 ---
@@ -354,134 +366,164 @@ from src.models.account import Account
 from src.models.budget import BudgetLimit
 from src.models.category import Category
 from src.models.transaction import Transaction
+from src.repositories.base import (
+    AccountRepository,
+    BudgetRepository,
+    CategoryRepository,
+    TransactionRepository,
+)
 
 
-class InMemoryAccountRepository:
+class InMemoryAccountRepository(AccountRepository):
     """Хранилище счетов в оперативной памяти."""
 
     def __init__(self) -> None:
-        self._accounts: dict[int, Account] = {}
-        self._id_counter: int = 1
+        self._storage: dict[int, Account] = {}
+        self._seq = 1
 
     def add(self, account: Account) -> Account:
-        """Сохраняет счет и присваивает уникальный идентификатор."""
-        assigned_id = self._id_counter
-        self._id_counter += 1
-        account.id = assigned_id
-        self._accounts[assigned_id] = account
-        return account
+        """Добавляет счет в оперативную память."""
+        saved = Account(
+            id=self._seq,
+            user_id=account.user_id,
+            name=account.name,
+            account_type=account.account_type,
+            balance=account.balance,
+            is_archived=account.is_archived,
+        )
+        self._storage[self._seq] = saved
+        self._seq += 1
+        return saved
 
     def get_by_id(self, account_id: int) -> Account | None:
-        """Извлекает счет по ID."""
-        return self._accounts.get(account_id)
+        """Возвращает счет по его идентификатору."""
+        return self._storage.get(account_id)
 
     def get_all_by_user(self, user_id: int) -> list[Account]:
-        """Фильтрует счета по владельцу."""
+        """Возвращает все активные (не архивные) счета пользователя."""
         return [
             acc
-            for acc in self._accounts.values()
+            for acc in self._storage.values()
             if acc.user_id == user_id and not acc.is_archived
         ]
 
     def update_balance(self, account_id: int, new_balance: Decimal) -> None:
-        """Мутирует остаток на счете."""
-        if account := self._accounts.get(account_id):
-            account.balance = new_balance
+        """Обновляет остаток счета. Если счет не найден — бросает ошибку."""
+        account = self.get_by_id(account_id)
+        if not account:
+            msg = f"Счет с ID {account_id} не найден для обновления баланса."
+            raise ValueError(msg)
+        account.balance = new_balance
 
     def archive(self, account_id: int) -> None:
-        """Переводит счет в архивный статус."""
-        if account := self._accounts.get(account_id):
-            account.is_archived = True
+        """Помечает счет как архивный. Если счет не найден — бросает ошибку."""
+        account = self.get_by_id(account_id)
+        if not account:
+            msg = f"Счет с ID {account_id} не найден для архивации."
+            raise ValueError(msg)
+        account.is_archived = True
 
 
-class InMemoryTransactionRepository:
+class InMemoryTransactionRepository(TransactionRepository):
     """Хранилище транзакций в оперативной памяти."""
 
     def __init__(self) -> None:
-        self._transactions: dict[int, Transaction] = {}
-        self._id_counter: int = 1
+        self._storage: dict[int, Transaction] = {}
+        self._seq = 1
 
-    def add(self, transaction: Transaction) -> Transaction:
-        """Добавляет транзакцию с автогенерацией ключа."""
-        assigned_id = self._id_counter
-        self._id_counter += 1
-        stored_tx = Transaction(
-            id=assigned_id,
-            user_id=transaction.user_id,
-            transaction_type=transaction.transaction_type,
-            amount=transaction.amount,
-            account_id=transaction.account_id,
-            category_id=transaction.category_id,
-            timestamp=transaction.timestamp,
-            to_account_id=transaction.to_account_id,
+    def add(self, tx: Transaction) -> Transaction:
+        """Сохраняет транзакцию в памяти."""
+        saved = Transaction(
+            id=self._seq,
+            user_id=tx.user_id,
+            transaction_type=tx.transaction_type,
+            amount=tx.amount,
+            account_id=tx.account_id,
+            category_id=tx.category_id,
+            timestamp=tx.timestamp,
+            to_account_id=tx.to_account_id,
         )
-        self._transactions[assigned_id] = stored_tx
-        return stored_tx
+        self._storage[self._seq] = saved
+        self._seq += 1
+        return saved
 
-    def get_by_id(self, transaction_id: int) -> Transaction | None:
-        """Возвращает транзакцию по ID."""
-        return self._transactions.get(transaction_id)
+    def get_by_id(self, tx_id: int) -> Transaction | None:
+        """Возвращает транзакцию по ее номеру."""
+        return self._storage.get(tx_id)
 
     def get_all_by_user(self, user_id: int) -> list[Transaction]:
-        """Возвращает список всех транзакций пользователя."""
+        """Возвращает историю операций пользователя."""
         return [
-            tx for tx in self._transactions.values() if tx.user_id == user_id
+            tx
+            for tx in self._storage.values()
+            if tx.user_id == user_id
         ]
 
-    def delete(self, transaction_id: int) -> None:
-        """Удаляет операцию из словаря."""
-        self._transactions.pop(transaction_id, None)
+    def delete(self, tx_id: int) -> None:
+        """Удаляет запись транзакции по первичному ключу."""
+        self._storage.pop(tx_id, None)
 
 
-class InMemoryBudgetRepository:
-    """Хранилище бюджетных лимитов в памяти."""
+class InMemoryBudgetRepository(BudgetRepository):
+    """Хранилище месячных лимитов бюджетов в оперативной памяти."""
 
     def __init__(self) -> None:
-        self._budgets: dict[tuple[int, int, int, int], BudgetLimit] = {}
-        self._id_counter: int = 1
+        self._storage: dict[str, BudgetLimit] = {}
+        self._seq = 1
 
     def set_limit(self, budget: BudgetLimit) -> BudgetLimit:
-        """Устанавливает лимит бюджета."""
-        key = (budget.user_id, budget.category_id, budget.month, budget.year)
-        budget.id = self._id_counter
-        self._id_counter += 1
-        self._budgets[key] = budget
-        return budget
+        """Устанавливает или перезаписывает лимит."""
+        key = f"{budget.user_id}:{budget.category_id}:{budget.month}:{budget.year}"
+        saved = BudgetLimit(
+            id=self._seq,
+            user_id=budget.user_id,
+            category_id=budget.category_id,
+            month=budget.month,
+            year=budget.year,
+            limit_amount=budget.limit_amount,
+        )
+        self._storage[key] = saved
+        self._seq += 1
+        return saved
 
     def get_limit(
         self, user_id: int, category_id: int, month: int, year: int
     ) -> BudgetLimit | None:
-        """Ищет лимит по составному ключу."""
-        return self._budgets.get((user_id, category_id, month, year))
+        """Возвращает лимит по ключу периода."""
+        key = f"{user_id}:{category_id}:{month}:{year}"
+        return self._storage.get(key)
 
 
-class InMemoryCategoryRepository:
-    """Хранилище категорий в памяти."""
+class InMemoryCategoryRepository(CategoryRepository):
+    """Хранилище категорий классификации операций в оперативной памяти."""
 
     def __init__(self) -> None:
-        self._categories: dict[int, Category] = {}
-        self._id_counter: int = 1
+        self._storage: dict[int, Category] = {}
+        self._seq = 1
 
     def add(self, category: Category) -> Category:
-        """Добавляет категорию."""
-        assigned_id = self._id_counter
-        self._id_counter += 1
-        stored = Category(
-            id=assigned_id,
+        """Добавляет категорию в память."""
+        saved = Category(
+            id=self._seq,
             user_id=category.user_id,
             name=category.name,
             direction=category.direction,
         )
-        self._categories[assigned_id] = stored
-        return stored
+        self._storage[self._seq] = saved
+        self._seq += 1
+        return saved
 
     def get_by_id(self, category_id: int) -> Category | None:
         """Возвращает категорию по ID."""
-        return self._categories.get(category_id)
+        return self._storage.get(category_id)
 
     def get_all_by_user(self, user_id: int) -> list[Category]:
-        """Возвращает категории пользователя."""
-        return [c for c in self._categories.values() if c.user_id == user_id]
+        """Возвращает список категорий пользователя."""
+        return [
+            cat
+            for cat in self._storage.values()
+            if cat.user_id == user_id
+        ]
 ```
 
 ---
@@ -493,17 +535,21 @@ class InMemoryCategoryRepository:
 from decimal import Decimal
 
 from src.models.account import Account, AccountType
-from src.repositories.base import AccountRepositoryProtocol
+from src.repositories.base import AccountRepository
 
 
 class AccountService:
     """Сервис бизнес-логики управления счетами и сальдо."""
 
-    def __init__(self, account_repo: AccountRepositoryProtocol) -> None:
+    def __init__(self, account_repo: AccountRepository) -> None:
         self._repo = account_repo
 
     def create_account(
-        self, user_id: int, name: str, account_type: AccountType, initial_balance: Decimal
+        self,
+        user_id: int,
+        name: str,
+        account_type: AccountType,
+        initial_balance: Decimal,
     ) -> Account:
         """Создает новый финансовый счет пользователя."""
         account = Account(
@@ -533,15 +579,52 @@ class AccountService:
         self._repo.archive(account_id)
 ```
 
+#### `src/services/category_service.py`
+```python
+from src.models.category import Category, CategoryDirection
+from src.repositories.base import CategoryRepository
+
+
+class CategoryService:
+    """Сервис управления категориями доходов и расходов."""
+
+    def __init__(self, category_repo: CategoryRepository) -> None:
+        self._repo = category_repo
+
+    def seed_defaults(self, user_id: int) -> None:
+        """Инициализирует базовые категории для пользователя."""
+        existing = self._repo.get_all_by_user(user_id)
+        if not existing:
+            self._repo.add(
+                Category(0, user_id, "Продукты", CategoryDirection.EXPENSE)
+            )
+            self._repo.add(
+                Category(0, user_id, "Кафе", CategoryDirection.EXPENSE)
+            )
+            self._repo.add(
+                Category(0, user_id, "Зарплата", CategoryDirection.INCOME)
+            )
+
+    def get_user_categories(self, user_id: int) -> list[Category]:
+        """Возвращает все доступные категории пользователя."""
+        return self._repo.get_all_by_user(user_id)
+
+    def get_by_id(self, category_id: int) -> Category | None:
+        """Возвращает категорию по её идентификатору."""
+        return self._repo.get_by_id(category_id)
+```
+
 #### `src/services/transaction_service.py`
 ```python
 from datetime import datetime
 from decimal import Decimal
 
+from src.models.category import CategoryDirection
 from src.models.transaction import Transaction, TransactionType
 from src.repositories.base import (
-    AccountRepositoryProtocol,
-    TransactionRepositoryProtocol,
+    AccountRepository,
+    CategoryRepository,
+    TransactionRepository,
 )
 
 
@@ -550,11 +633,13 @@ class TransactionService:
 
     def __init__(
         self,
-        tx_repo: TransactionRepositoryProtocol,
-        account_repo: AccountRepositoryProtocol,
+        tx_repo: TransactionRepository,
+        account_repo: AccountRepository,
+        category_repo: CategoryRepository | None = None,
     ) -> None:
         self._tx_repo = tx_repo
         self._account_repo = account_repo
+        self._category_repo = category_repo
 
     def register_transaction(
         self,
@@ -565,14 +650,40 @@ class TransactionService:
         category_id: int | None = None,
     ) -> Transaction:
         """Регистрирует приход/расход и пересчитывает баланс счета."""
-        if amount <= Decimal("0.00"):
-            msg = "Сумма операции обязана быть строго положительной."
+        if not amount.is_finite() or amount <= Decimal("0.00"):
+            msg = "Сумма операции обязана быть конечной и строго положительной."
             raise ValueError(msg)
 
         account = self._account_repo.get_by_id(account_id)
         if not account or account.user_id != user_id:
-            msg = "Указанный счет не существует или принадлежит другому пользователю."
+            msg = (
+                "Указанный счет не существует "
+                "или принадлежит другому пользователю."
+            )
             raise PermissionError(msg)
+
+        if category_id is not None and self._category_repo is not None:
+            category = self._category_repo.get_by_id(category_id)
+            if not category or category.user_id != user_id:
+                msg = (
+                    "Категория не найдена "
+                    "или принадлежит другому пользователю."
+                )
+                raise PermissionError(msg)
+
+            if (
+                tx_type == TransactionType.EXPENSE
+                and category.direction != CategoryDirection.EXPENSE
+            ):
+                msg = "Для операции расхода выбрана категория доходов."
+                raise ValueError(msg)
+
+            if (
+                tx_type == TransactionType.INCOME
+                and category.direction != CategoryDirection.INCOME
+            ):
+                msg = "Для операции дохода выбрана категория расходов."
+                raise ValueError(msg)
 
         if tx_type == TransactionType.EXPENSE:
             new_balance = account.balance - amount
@@ -603,8 +714,8 @@ class TransactionService:
         amount: Decimal,
     ) -> Transaction:
         """Выполняет межбалансовый перевод без изменения совокупного капитала."""
-        if amount <= Decimal("0.00"):
-            msg = "Сумма перевода обязана быть строго положительной."
+        if not amount.is_finite() or amount <= Decimal("0.00"):
+            msg = "Сумма перевода обязана быть конечной и строго положительной."
             raise ValueError(msg)
 
         if from_account_id == to_account_id:
@@ -650,14 +761,24 @@ class TransactionService:
             raise ValueError(msg)
 
         if tx.transaction_type == TransactionType.EXPENSE:
-            self._account_repo.update_balance(account.id, account.balance + tx.amount)
+            self._account_repo.update_balance(
+                account.id, account.balance + tx.amount
+            )
         elif tx.transaction_type == TransactionType.INCOME:
-            self._account_repo.update_balance(account.id, account.balance - tx.amount)
+            self._account_repo.update_balance(
+                account.id, account.balance - tx.amount
+            )
         elif tx.transaction_type == TransactionType.TRANSFER and tx.to_account_id:
             target = self._account_repo.get_by_id(tx.to_account_id)
-            if target:
-                self._account_repo.update_balance(account.id, account.balance + tx.amount)
-                self._account_repo.update_balance(target.id, target.balance - tx.amount)
+            if not target:
+                msg = "Целевой счет перевода не найден для отката операции."
+                raise ValueError(msg)
+            self._account_repo.update_balance(
+                account.id, account.balance + tx.amount
+            )
+            self._account_repo.update_balance(
+                target.id, target.balance - tx.amount
+            )
 
         self._tx_repo.delete(transaction_id)
 
@@ -672,29 +793,31 @@ from decimal import Decimal
 
 from src.models.budget import BudgetLimit
 from src.models.transaction import TransactionType
-from src.repositories.base import (
-    BudgetRepositoryProtocol,
-    TransactionRepositoryProtocol,
-)
+from src.repositories.base import BudgetRepository, TransactionRepository
 
 
 class BudgetService:
-    """Сервис контроля месячных бюджетов и индикации перерасходов."""
+    """Сервис контроля лимитов и расчета освоения бюджетов."""
 
     def __init__(
         self,
-        budget_repo: BudgetRepositoryProtocol,
-        tx_repo: TransactionRepositoryProtocol,
+        budget_repo: BudgetRepository,
+        tx_repo: TransactionRepository,
     ) -> None:
         self._budget_repo = budget_repo
         self._tx_repo = tx_repo
 
     def set_budget(
-        self, user_id: int, category_id: int, month: int, year: int, limit: Decimal
+        self,
+        user_id: int,
+        category_id: int,
+        month: int,
+        year: int,
+        limit_amount: Decimal,
     ) -> BudgetLimit:
-        """Устанавливает лимит расходов на месяц."""
-        if limit <= Decimal("0.00"):
-            msg = "Лимит бюджета обязан быть положительным числом."
+        """Устанавливает лимит бюджета на календарный месяц."""
+        if not limit_amount.is_finite() or limit_amount <= Decimal("0.00"):
+            msg = "Лимит бюджета обязан быть конечным положительным числом."
             raise ValueError(msg)
 
         budget = BudgetLimit(
@@ -703,24 +826,24 @@ class BudgetService:
             category_id=category_id,
             month=month,
             year=year,
-            limit_amount=limit,
+            limit_amount=limit_amount,
         )
         return self._budget_repo.set_limit(budget)
 
     def calculate_status(
         self, user_id: int, category_id: int, month: int, year: int
     ) -> tuple[Decimal, Decimal, str]:
-        """Рассчитывает фактический расход, процент освоения и цветовой индикатор."""
+        """Рассчитывает сумму расходов, процент освоения и цветовой статус."""
         budget = self._budget_repo.get_limit(user_id, category_id, month, year)
         if not budget:
-            msg = "Бюджет на данный период не установлен."
+            msg = "Бюджетный лимит на указанный период не установлен."
             raise ValueError(msg)
 
-        all_tx = self._tx_repo.get_all_by_user(user_id)
+        txs = self._tx_repo.get_all_by_user(user_id)
         spent = sum(
             (
                 tx.amount
-                for tx in all_tx
+                for tx in txs
                 if tx.category_id == category_id
                 and tx.transaction_type == TransactionType.EXPENSE
                 and tx.timestamp.month == month
@@ -729,14 +852,18 @@ class BudgetService:
             Decimal("0.00"),
         )
 
-        ratio = (spent / budget.limit_amount) * Decimal("100")
+        ratio = (
+            (spent / budget.limit_amount) * Decimal("100.0")
+            if budget.limit_amount > 0
+            else Decimal("0.0")
+        )
 
         if ratio < Decimal("80.0"):
-            indicator = "GREEN (Штатно)"
-        elif Decimal("80.0") <= ratio <= Decimal("100.0"):
-            indicator = "YELLOW (Предупреждение)"
+            indicator = "GREEN (Штатный режим)"
+        elif ratio <= Decimal("100.0"):
+            indicator = "YELLOW (Внимание, приближение к лимиту)"
         else:
-            indicator = "RED (Перерасход)"
+            indicator = "RED (Лимит превышен)"
 
         return spent, ratio, indicator
 ```
@@ -747,61 +874,50 @@ import csv
 import io
 
 from src.models.transaction import Transaction
-from src.repositories.base import (
-    AccountRepositoryProtocol,
-    CategoryRepositoryProtocol,
-)
+from src.repositories.base import AccountRepository, CategoryRepository
 
 
 class ExportService:
-    """Сервис аппаратного экспорта журнала транзакций в формат CSV UTF-8."""
+    """Сервис экспорта журнала операций в плоский формат CSV."""
 
     def __init__(
         self,
-        account_repo: AccountRepositoryProtocol,
-        category_repo: CategoryRepositoryProtocol,
+        account_repo: AccountRepository,
+        category_repo: CategoryRepository,
     ) -> None:
         self._account_repo = account_repo
         self._category_repo = category_repo
 
     def export_to_csv(self, transactions: list[Transaction]) -> str:
-        """Формирует CSV поток текущей выборки операций."""
+        """Формирует строковый поток CSV в кодировке UTF-8 с BOM."""
         output = io.StringIO()
-        writer = csv.writer(output, delimiter=";", quoting=csv.QUOTE_MINIMAL)
+        output.write("\ufeff")
+        writer = csv.writer(output, delimiter=";")
 
-        writer.writerow([
-            "ID",
-            "Дата и время",
-            "Тип операции",
-            "Счет списания",
-            "Счет зачисления",
-            "Категория",
-            "Сумма (руб)",
-        ])
+        writer.writerow(
+            ["ID", "Дата и время", "Тип", "Счет", "Категория", "Сумма (руб.)"]
+        )
 
         for tx in transactions:
-            account = self._account_repo.get_by_id(tx.account_id)
-            account_name = account.name if account else "Неизвестный счет"
+            acc = self._account_repo.get_by_id(tx.account_id)
+            acc_name = acc.name if acc else "Неизвестный"
 
-            target_name = "-"
-            if tx.to_account_id:
-                target = self._account_repo.get_by_id(tx.to_account_id)
-                target_name = target.name if target else "Неизвестный счет"
-
-            category_name = "-"
+            cat_name = "Без категории"
             if tx.category_id:
-                category = self._category_repo.get_by_id(tx.category_id)
-                category_name = category.name if category else "-"
+                cat = self._category_repo.get_by_id(tx.category_id)
+                if cat:
+                    cat_name = cat.name
 
-            writer.writerow([
-                tx.id,
-                tx.timestamp.strftime("%Y-%m-%d %H:%M:%S"),
-                tx.transaction_type.value,
-                account_name,
-                target_name,
-                category_name,
-                f"{tx.amount:.2f}",
-            ])
+            writer.writerow(
+                [
+                    tx.id,
+                    tx.timestamp.strftime("%Y-%m-%d %H:%M:%S"),
+                    tx.transaction_type.value,
+                    acc_name,
+                    cat_name,
+                    f"{tx.amount:.2f}",
+                ]
+            )
 
         return output.getvalue()
 ```
@@ -811,19 +927,51 @@ class ExportService:
 ### 4.5. Консольный терминальный интерфейс (`src/cli/terminal_interface.py`)
 ```python
 from decimal import Decimal, InvalidOperation
+from enum import IntEnum
 
 from src.models.account import AccountType
-from src.models.category import Category, CategoryDirection
 from src.models.transaction import TransactionType
-from src.repositories.base import CategoryRepositoryProtocol
 from src.services.account_service import AccountService
 from src.services.budget_service import BudgetService
+from src.services.category_service import CategoryService
 from src.services.export_service import ExportService
 from src.services.transaction_service import TransactionService
 
 
+class AccountTypeChoice(IntEnum):
+    """Выбор типа счёта в меню CLI."""
+
+    DEBIT = 1
+    CREDIT = 2
+    CASH = 3
+    SAVINGS = 4
+
+    @property
+    def to_domain(self) -> AccountType:
+        mapping = {
+            AccountTypeChoice.DEBIT: AccountType.DEBIT,
+            AccountTypeChoice.CREDIT: AccountType.CREDIT,
+            AccountTypeChoice.CASH: AccountType.CASH,
+            AccountTypeChoice.SAVINGS: AccountType.SAVINGS,
+        }
+        return mapping[self]
+
+
+class TransactionKindChoice(IntEnum):
+    """Выбор типа операции в меню CLI."""
+
+    EXPENSE = 1
+    INCOME = 2
+
+    @property
+    def to_domain(self) -> TransactionType:
+        if self == TransactionKindChoice.EXPENSE:
+            return TransactionType.EXPENSE
+        return TransactionType.INCOME
+
+
 class TerminalInterface:
-    """Консольный интерфейс взаимодействия пользователя с системой CapitalTracker."""
+    """Консольный интерфейс системы CapitalTracker."""
 
     def __init__(
         self,
@@ -831,22 +979,22 @@ class TerminalInterface:
         account_service: AccountService,
         tx_service: TransactionService,
         budget_service: BudgetService,
-        category_repo: CategoryRepositoryProtocol,
+        category_service: CategoryService,
         export_service: ExportService,
     ) -> None:
         self._user_id = user_id
         self._acc_svc = account_service
         self._tx_svc = tx_service
         self._bdg_svc = budget_service
-        self._cat_repo = category_repo
+        self._cat_svc = category_service
         self._exp_svc = export_service
 
     def run(self) -> None:
         """Главный цикл обработки команд терминала."""
-        self._seed_default_categories()
+        self._cat_svc.seed_defaults(self._user_id)
         while True:
             self._print_header()
-            choice = input("Выберите пункт меню [0-8]: ").strip()
+            choice = input("Выберите пункт меню [0-9]: ").strip()
 
             if choice == "1":
                 self._handle_show_accounts()
@@ -864,25 +1012,13 @@ class TerminalInterface:
                 self._handle_delete_transaction()
             elif choice == "8":
                 self._handle_export_csv()
+            elif choice == "9":
+                self._handle_archive_account()
             elif choice == "0":
                 print("\nЗавершение сеанса. Данные сохранены.")
                 break
             else:
                 print("\n[!] Некорректный выбор. Повторите ввод.")
-
-    def _seed_default_categories(self) -> None:
-        """Инициализирует базовый набор категорий."""
-        existing = self._cat_repo.get_all_by_user(self._user_id)
-        if not existing:
-            self._cat_repo.add(
-                Category(0, self._user_id, "Продукты", CategoryDirection.EXPENSE)
-            )
-            self._cat_repo.add(
-                Category(0, self._user_id, "Кафе", CategoryDirection.EXPENSE)
-            )
-            self._cat_repo.add(
-                Category(0, self._user_id, "Зарплата", CategoryDirection.INCOME)
-            )
 
     def _print_header(self) -> None:
         """Отображает верхнюю информационную плашку."""
@@ -898,8 +1034,22 @@ class TerminalInterface:
         print("6. Бюджеты и контроль лимитов")
         print("7. Удалить операцию (Откат остатка)")
         print("8. Экспорт журнала в CSV (Результат доработки)")
+        print("9. Заархивировать счет")
         print("0. Выход")
         print("-" * 55)
+
+    def _read_choice(self, prompt: str, enum_cls: type[IntEnum]) -> IntEnum:
+        """Безопасное считывание выбора пользователя из перечисления."""
+        while True:
+            raw = input(prompt).strip()
+            if not raw.isdigit():
+                print("[!] Ошибка: введите целое число.")
+                continue
+            try:
+                return enum_cls(int(raw))
+            except ValueError:
+                valid_keys = ", ".join(str(e.value) for e in enum_cls)
+                print(f"[!] Неверный выбор. Варианты: {valid_keys}")
 
     def _handle_show_accounts(self) -> None:
         """Показывает перечень счетов."""
@@ -910,7 +1060,9 @@ class TerminalInterface:
 
         print("\nВаши активные счета:")
         for acc in accounts:
-            print(f"  [{acc.id}] {acc.name} ({acc.account_type.value}): {acc.balance:.2f} руб.")
+            type_str = acc.account_type.value
+            bal_str = f"{acc.balance:.2f}"
+            print(f"  [{acc.id}] {acc.name} ({type_str}): {bal_str} руб.")
 
     def _handle_create_account(self) -> None:
         """Диалог создания счета."""
@@ -920,54 +1072,89 @@ class TerminalInterface:
             return
 
         print("Доступные типы: 1. DEBIT, 2. CREDIT, 3. CASH, 4. SAVINGS")
-        t_choice = input("Выберите тип [1-4]: ").strip()
-        type_map = {
-            "1": AccountType.DEBIT,
-            "2": AccountType.CREDIT,
-            "3": AccountType.CASH,
-            "4": AccountType.SAVINGS,
-        }
-        acc_type = type_map.get(t_choice, AccountType.DEBIT)
+        choice = self._read_choice("Выберите тип [1-4]: ", AccountTypeChoice)
+        acc_type = choice.to_domain
 
         raw_balance = input("Введите начальный остаток: ").strip()
         try:
             balance = Decimal(raw_balance)
-            acc = self._acc_svc.create_account(self._user_id, name, acc_type, balance)
-            print(f"[OK] Счет '{acc.name}' успешно открыт с балансом {acc.balance:.2f} руб.")
+            if not balance.is_finite():
+                print("[!] Ошибка: баланс должен быть конечным числом.")
+                return
+            acc = self._acc_svc.create_account(
+                self._user_id, name, acc_type, balance
+            )
+            print(
+                f"[OK] Счет '{acc.name}' успешно открыт "
+                f"с балансом {acc.balance:.2f} руб."
+            )
         except InvalidOperation:
             print("[!] Ошибка: Некорректный формат денежной суммы.")
+
+    def _handle_archive_account(self) -> None:
+        """Диалог архивации счета."""
+        self._handle_show_accounts()
+        raw_id = input("Введите ID счета для архивации: ").strip()
+        if not raw_id.isdigit():
+            print("[!] Некорректный ID счета.")
+            return
+        acc_id = int(raw_id)
+        try:
+            self._acc_svc.archive_account(acc_id, self._user_id)
+            print(f"[OK] Счет ID {acc_id} успешно переведен в архив.")
+        except ValueError as err:
+            print(f"[!] Ошибка: {err}")
 
     def _handle_add_transaction(self) -> None:
         """Диалог регистрации дохода или расхода."""
         self._handle_show_accounts()
-        acc_id = int(input("Введите ID счета: ").strip())
-        print("Тип: 1. Расход, 2. Доход")
-        t_choice = input("Выберите тип [1-2]: ").strip()
-        tx_type = TransactionType.EXPENSE if t_choice == "1" else TransactionType.INCOME
+        raw_acc_id = input("Введите ID счета: ").strip()
+        if not raw_acc_id.isdigit():
+            print("[!] Некорректный ID счета.")
+            return
+        acc_id = int(raw_acc_id)
 
-        categories = self._cat_repo.get_all_by_user(self._user_id)
+        print("Тип операции: 1. Расход, 2. Доход")
+        choice = self._read_choice("Выберите тип [1-2]: ", TransactionKindChoice)
+        tx_type = choice.to_domain
+
+        categories = self._cat_svc.get_user_categories(self._user_id)
         print("Доступные категории:")
         for cat in categories:
             print(f"  [{cat.id}] {cat.name} ({cat.direction.value})")
-        cat_id = int(input("Введите ID категории: ").strip())
+        raw_cat_id = input("Введите ID категории: ").strip()
+        if not raw_cat_id.isdigit():
+            print("[!] Некорректный ID категории.")
+            return
+        cat_id = int(raw_cat_id)
 
-        amount = Decimal(input("Введите сумму: ").strip())
+        raw_amount = input("Введите сумму: ").strip()
         try:
-            self._tx_svc.register_transaction(self._user_id, tx_type, amount, acc_id, cat_id)
+            amount = Decimal(raw_amount)
+            self._tx_svc.register_transaction(
+                self._user_id, tx_type, amount, acc_id, cat_id
+            )
             print("[OK] Операция успешно зафиксирована, баланс счета пересчитан.")
-        except (ValueError, PermissionError) as err:
+        except (InvalidOperation, ValueError, PermissionError) as err:
             print(f"[!] Ошибка: {err}")
 
     def _handle_transfer(self) -> None:
         """Диалог внутреннего перевода."""
         self._handle_show_accounts()
-        from_id = int(input("ID счета списания: ").strip())
-        to_id = int(input("ID счета зачисления: ").strip())
-        amount = Decimal(input("Сумма перевода: ").strip())
+        raw_from = input("ID счета списания: ").strip()
+        raw_to = input("ID счета зачисления: ").strip()
+        if not (raw_from.isdigit() and raw_to.isdigit()):
+            print("[!] Некорректные идентификаторы счетов.")
+            return
+
+        raw_amount = input("Сумма перевода: ").strip()
         try:
-            self._tx_svc.make_transfer(self._user_id, from_id, to_id, amount)
+            amount = Decimal(raw_amount)
+            self._tx_svc.make_transfer(
+                self._user_id, int(raw_from), int(raw_to), amount
+            )
             print("[OK] Перевод успешно выполнен. Совокупный капитал неизменен.")
-        except (ValueError, PermissionError) as err:
+        except (InvalidOperation, ValueError, PermissionError) as err:
             print(f"[!] Ошибка: {err}")
 
     def _handle_show_history(self) -> None:
@@ -989,34 +1176,61 @@ class TerminalInterface:
         """Проверяет освоение бюджета."""
         print("1. Установить лимит, 2. Проверить статус")
         sub = input("Выбор: ").strip()
-        month = int(input("Месяц [1-12]: ").strip())
-        year = int(input("Год [например, 2026]: ").strip())
+        raw_month = input("Месяц [1-12]: ").strip()
+        raw_year = input("Год [например, 2026]: ").strip()
+        if not (raw_month.isdigit() and raw_year.isdigit()):
+            print("[!] Некорректный месяц или год.")
+            return
+        month = int(raw_month)
+        year = int(raw_year)
 
-        categories = self._cat_repo.get_all_by_user(self._user_id)
+        if not 1 <= month <= 12:
+            print("[!] Ошибка: номер месяца должен быть в диапазоне от 1 до 12.")
+            return
+
+        categories = self._cat_svc.get_user_categories(self._user_id)
         for cat in categories:
             print(f"  [{cat.id}] {cat.name}")
-        cat_id = int(input("ID категории: ").strip())
+        raw_cat = input("ID категории: ").strip()
+        if not raw_cat.isdigit():
+            print("[!] Некорректный ID категории.")
+            return
+        cat_id = int(raw_cat)
 
         if sub == "1":
-            lim = Decimal(input("Лимит (руб): ").strip())
-            self._bdg_svc.set_budget(self._user_id, cat_id, month, year, lim)
-            print("[OK] Лимит успешно установлен.")
+            raw_lim = input("Лимит (руб): ").strip()
+            try:
+                lim = Decimal(raw_lim)
+                self._bdg_svc.set_budget(
+                    self._user_id, cat_id, month, year, lim
+                )
+                print("[OK] Лимит успешно установлен.")
+            except (InvalidOperation, ValueError) as err:
+                print(f"[!] Ошибка: {err}")
         else:
             try:
                 spent, ratio, ind = self._bdg_svc.calculate_status(
                     self._user_id, cat_id, month, year
                 )
-                print(f"Потрачено: {spent:.2f} руб. ({ratio:.1f}%) | Статус: {ind}")
+                print(
+                    f"Потрачено: {spent:.2f} руб. ({ratio:.1f}%) | Статус: {ind}"
+                )
             except ValueError as err:
                 print(f"[!] {err}")
 
     def _handle_delete_transaction(self) -> None:
         """Удаляет транзакцию с откатом сальдо."""
         self._handle_show_history()
-        tx_id = int(input("Введите ID транзакции для отмены: ").strip())
+        raw_tx_id = input("Введите ID транзакции для отмены: ").strip()
+        if not raw_tx_id.isdigit():
+            print("[!] Некорректный ID транзакции.")
+            return
+        tx_id = int(raw_tx_id)
         try:
             self._tx_svc.delete_transaction(tx_id, self._user_id)
-            print("[OK] Транзакция удалена, остаток счета автоматически восстановлен.")
+            print(
+                "[OK] Транзакция удалена, остаток счета автоматически восстановлен."
+            )
         except (ValueError, PermissionError) as err:
             print(f"[!] Ошибка: {err}")
 
@@ -1050,12 +1264,19 @@ from src.repositories.in_memory import (
 )
 from src.services.account_service import AccountService
 from src.services.budget_service import BudgetService
+from src.services.category_service import CategoryService
 from src.services.export_service import ExportService
 from src.services.transaction_service import TransactionService
 
 
 def main() -> None:
-    """Инициализирует доменные сервисы и запускает рабочий цикл CLI."""
+    """Инициализирует доменные сервисы и запускает рабочий цикл CLI.
+
+    Примечание:
+    Значение user_id = 1 зафиксировано осознанно в качестве архитектурного
+    ограничения консольного прототипа ядра (MVP). Полноценная сессионная
+    многопользовательская авторизация вынесена в целевую веб-версию системы.
+    """
     user_id = 1
 
     account_repo = InMemoryAccountRepository()
@@ -1064,7 +1285,12 @@ def main() -> None:
     category_repo = InMemoryCategoryRepository()
 
     account_service = AccountService(account_repo)
-    transaction_service = TransactionService(transaction_repo, account_repo)
+    category_service = CategoryService(category_repo)
+    transaction_service = TransactionService(
+        tx_repo=transaction_repo,
+        account_repo=account_repo,
+        category_repo=category_repo,
+    )
     budget_service = BudgetService(budget_repo, transaction_repo)
     export_service = ExportService(account_repo, category_repo)
 
@@ -1073,7 +1299,7 @@ def main() -> None:
         account_service=account_service,
         tx_service=transaction_service,
         budget_service=budget_service,
-        category_repo=category_repo,
+        category_service=category_service,
         export_service=export_service,
     )
 
@@ -1106,7 +1332,7 @@ $ uv run ruff format --check src/
 
 ## 6. Демонстрация работы консольного прототипа
 
-При запуске `uv run python -m src.main` оператору доступно полнофункциональное взаимодействие с ядром системы:
+При запуске `uv run capital-tracker` (или `uv run python -m src.main`) оператору доступно полнофункциональное взаимодействие с ядром системы:
 
 ```text
 =======================================================
@@ -1120,9 +1346,10 @@ $ uv run ruff format --check src/
 6. Бюджеты и контроль лимитов
 7. Удалить операцию (Откат остатка)
 8. Экспорт журнала в CSV (Результат доработки)
+9. Заархивировать счет
 0. Выход
 -------------------------------------------------------
-Выберите пункт меню [0-8]: 2
+Выберите пункт меню [0-9]: 2
 Введите наименование счета: Карта Т-Банк
 Доступные типы: 1. DEBIT, 2. CREDIT, 3. CASH, 4. SAVINGS
 Выберите тип [1-4]: 1
@@ -1133,11 +1360,11 @@ $ uv run ruff format --check src/
  CAPITALTRACKER CLI | Совокупный капитал: 50000.00 руб.
 =======================================================
 ...
-Выберите пункт меню [0-8]: 3
+Выберите пункт меню [0-9]: 3
 Ваши активные счета:
   [1] Карта Т-Банк (DEBIT): 50000.00 руб.
 Введите ID счета: 1
-Тип: 1. Расход, 2. Доход
+Тип операции: 1. Расход, 2. Доход
 Выберите тип [1-2]: 1
 Доступные категории:
   [1] Продукты (EXPENSE)
@@ -1151,7 +1378,7 @@ $ uv run ruff format --check src/
  CAPITALTRACKER CLI | Совокупный капитал: 48800.00 руб.
 =======================================================
 ...
-Выберите пункт меню [0-8]: 8
+Выберите пункт меню [0-9]: 8
 [OK] Данные выгружены в файл 'transactions_export.csv' в кодировке UTF-8.
 ```
 
