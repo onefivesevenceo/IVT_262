@@ -2,62 +2,47 @@ import csv
 import io
 
 from src.models.transaction import Transaction
-from src.repositories.base import (
-    AccountRepositoryProtocol,
-    CategoryRepositoryProtocol,
-)
+from src.repositories.base import AccountRepository, CategoryRepository
 
 
 class ExportService:
-    """Сервис аппаратного экспорта журнала транзакций в формат CSV UTF-8."""
+    """Сервис экспорта журнала операций в плоский формат CSV."""
 
     def __init__(
         self,
-        account_repo: AccountRepositoryProtocol,
-        category_repo: CategoryRepositoryProtocol,
+        account_repo: AccountRepository,
+        category_repo: CategoryRepository,
     ) -> None:
         self._account_repo = account_repo
         self._category_repo = category_repo
 
     def export_to_csv(self, transactions: list[Transaction]) -> str:
-        """Формирует CSV поток текущей выборки операций."""
+        """Формирует строковый поток CSV в кодировке UTF-8 с BOM."""
         output = io.StringIO()
-        writer = csv.writer(output, delimiter=";", quoting=csv.QUOTE_MINIMAL)
+        output.write("\ufeff")
+        writer = csv.writer(output, delimiter=";")
 
         writer.writerow(
-            [
-                "ID",
-                "Дата и время",
-                "Тип операции",
-                "Счет списания",
-                "Счет зачисления",
-                "Категория",
-                "Сумма (руб)",
-            ]
+            ["ID", "Дата и время", "Тип", "Счет", "Категория", "Сумма (руб.)"]
         )
 
         for tx in transactions:
-            account = self._account_repo.get_by_id(tx.account_id)
-            account_name = account.name if account else "Неизвестный счет"
+            acc = self._account_repo.get_by_id(tx.account_id)
+            acc_name = acc.name if acc else "Неизвестный"
 
-            target_name = "-"
-            if tx.to_account_id:
-                target = self._account_repo.get_by_id(tx.to_account_id)
-                target_name = target.name if target else "Неизвестный счет"
-
-            category_name = "-"
+            cat_name = "Без категории"
             if tx.category_id:
-                category = self._category_repo.get_by_id(tx.category_id)
-                category_name = category.name if category else "-"
+                cat = self._category_repo.get_by_id(tx.category_id)
+                if cat:
+                    cat_name = cat.name
 
             writer.writerow(
                 [
                     tx.id,
                     tx.timestamp.strftime("%Y-%m-%d %H:%M:%S"),
                     tx.transaction_type.value,
-                    account_name,
-                    target_name,
-                    category_name,
+                    acc_name,
+                    cat_name,
                     f"{tx.amount:.2f}",
                 ]
             )

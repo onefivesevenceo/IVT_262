@@ -1,13 +1,13 @@
 from decimal import Decimal
 
 from src.models.account import Account, AccountType
-from src.repositories.base import AccountRepositoryProtocol
+from src.repositories.base import AccountRepository
 
 
 class AccountService:
     """Сервис бизнес-логики управления счетами и сальдо."""
 
-    def __init__(self, account_repo: AccountRepositoryProtocol) -> None:
+    def __init__(self, account_repo: AccountRepository) -> None:
         self._repo = account_repo
 
     def create_account(
