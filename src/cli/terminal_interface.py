@@ -1,4 +1,5 @@
 from decimal import Decimal, InvalidOperation
+from enum import IntEnum
 
 from src.models.account import AccountType
 from src.models.category import Category, CategoryDirection
@@ -10,8 +11,40 @@ from src.services.export_service import ExportService
 from src.services.transaction_service import TransactionService
 
 
+class AccountTypeChoice(IntEnum):
+    """Выбор типа счёта в меню CLI."""
+
+    DEBIT = 1
+    CREDIT = 2
+    CASH = 3
+    SAVINGS = 4
+
+    @property
+    def to_domain(self) -> AccountType:
+        mapping = {
+            AccountTypeChoice.DEBIT: AccountType.DEBIT,
+            AccountTypeChoice.CREDIT: AccountType.CREDIT,
+            AccountTypeChoice.CASH: AccountType.CASH,
+            AccountTypeChoice.SAVINGS: AccountType.SAVINGS,
+        }
+        return mapping[self]
+
+
+class TransactionKindChoice(IntEnum):
+    """Выбор типа операции в меню CLI."""
+
+    EXPENSE = 1
+    INCOME = 2
+
+    @property
+    def to_domain(self) -> TransactionType:
+        if self == TransactionKindChoice.EXPENSE:
+            return TransactionType.EXPENSE
+        return TransactionType.INCOME
+
+
 class TerminalInterface:
-    """Консольный интерфейс взаимодействия пользователя с системой CapitalTracker."""
+    """Консольный интерфейс системы CapitalTracker."""
 
     def __init__(
         self,
@@ -89,6 +122,19 @@ class TerminalInterface:
         print("0. Выход")
         print("-" * 55)
 
+    def _read_choice(self, prompt: str, enum_cls: type[IntEnum]) -> IntEnum:
+        """Безопасное считывание выбора пользователя из перечисления."""
+        while True:
+            raw = input(prompt).strip()
+            if not raw.isdigit():
+                print("[!] Ошибка: введите целое число.")
+                continue
+            try:
+                return enum_cls(int(raw))
+            except ValueError:
+                valid_keys = ", ".join(str(e.value) for e in enum_cls)
+                print(f"[!] Неверный выбор. Варианты: {valid_keys}")
+
     def _handle_show_accounts(self) -> None:
         """Показывает перечень счетов."""
         accounts = self._acc_svc.get_user_accounts(self._user_id)
@@ -98,9 +144,9 @@ class TerminalInterface:
 
         print("\nВаши активные счета:")
         for acc in accounts:
-            print(
-                f"  [{acc.id}] {acc.name} ({acc.account_type.value}): {acc.balance:.2f} руб."
-            )
+            type_str = acc.account_type.value
+            bal_str = f"{acc.balance:.2f}"
+            print(f"  [{acc.id}] {acc.name} ({type_str}): {bal_str} руб.")
 
     def _handle_create_account(self) -> None:
         """Диалог создания счета."""
@@ -110,21 +156,18 @@ class TerminalInterface:
             return
 
         print("Доступные типы: 1. DEBIT, 2. CREDIT, 3. CASH, 4. SAVINGS")
-        t_choice = input("Выберите тип [1-4]: ").strip()
-        type_map = {
-            "1": AccountType.DEBIT,
-            "2": AccountType.CREDIT,
-            "3": AccountType.CASH,
-            "4": AccountType.SAVINGS,
-        }
-        acc_type = type_map.get(t_choice, AccountType.DEBIT)
+        choice = self._read_choice("Выберите тип [1-4]: ", AccountTypeChoice)
+        acc_type = choice.to_domain
 
         raw_balance = input("Введите начальный остаток: ").strip()
         try:
             balance = Decimal(raw_balance)
-            acc = self._acc_svc.create_account(self._user_id, name, acc_type, balance)
+            acc = self._acc_svc.create_account(
+                self._user_id, name, acc_type, balance
+            )
             print(
-                f"[OK] Счет '{acc.name}' успешно открыт с балансом {acc.balance:.2f} руб."
+                f"[OK] Счет '{acc.name}' успешно открыт "
+                f"с балансом {acc.balance:.2f} руб."
             )
         except InvalidOperation:
             print("[!] Ошибка: Некорректный формат денежной суммы.")
@@ -138,9 +181,9 @@ class TerminalInterface:
             return
         acc_id = int(raw_acc_id)
 
-        print("Тип: 1. Расход, 2. Доход")
-        t_choice = input("Выберите тип [1-2]: ").strip()
-        tx_type = TransactionType.EXPENSE if t_choice == "1" else TransactionType.INCOME
+        print("Тип операции: 1. Расход, 2. Доход")
+        choice = self._read_choice("Выберите тип [1-2]: ", TransactionKindChoice)
+        tx_type = choice.to_domain
 
         categories = self._cat_repo.get_all_by_user(self._user_id)
         print("Доступные категории:")
@@ -208,6 +251,10 @@ class TerminalInterface:
         month = int(raw_month)
         year = int(raw_year)
 
+        if not 1 <= month <= 12:
+            print("[!] Ошибка: номер месяца должен быть в диапазоне от 1 до 12.")
+            return
+
         categories = self._cat_repo.get_all_by_user(self._user_id)
         for cat in categories:
             print(f"  [{cat.id}] {cat.name}")
@@ -221,7 +268,9 @@ class TerminalInterface:
             raw_lim = input("Лимит (руб): ").strip()
             try:
                 lim = Decimal(raw_lim)
-                self._bdg_svc.set_budget(self._user_id, cat_id, month, year, lim)
+                self._bdg_svc.set_budget(
+                    self._user_id, cat_id, month, year, lim
+                )
                 print("[OK] Лимит успешно установлен.")
             except (InvalidOperation, ValueError) as err:
                 print(f"[!] Ошибка: {err}")
@@ -230,7 +279,9 @@ class TerminalInterface:
                 spent, ratio, ind = self._bdg_svc.calculate_status(
                     self._user_id, cat_id, month, year
                 )
-                print(f"Потрачено: {spent:.2f} руб. ({ratio:.1f}%) | Статус: {ind}")
+                print(
+                    f"Потрачено: {spent:.2f} руб. ({ratio:.1f}%) | Статус: {ind}"
+                )
             except ValueError as err:
                 print(f"[!] {err}")
 
@@ -244,7 +295,9 @@ class TerminalInterface:
         tx_id = int(raw_tx_id)
         try:
             self._tx_svc.delete_transaction(tx_id, self._user_id)
-            print("[OK] Транзакция удалена, остаток счета автоматически восстановлен.")
+            print(
+                "[OK] Транзакция удалена, остаток счета автоматически восстановлен."
+            )
         except (ValueError, PermissionError) as err:
             print(f"[!] Ошибка: {err}")
 

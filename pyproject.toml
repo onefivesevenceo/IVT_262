@@ -1,29 +1,43 @@
 [project]
-name = "git"
+name = "capital-tracker"
 version = "0.1.0"
-description = "Add your description here"
+description = "Система мониторинга денежных потоков, категоризации расходов и планирования бюджета"
 readme = "README.md"
-authors = [
-    { name = "onefivesevenceo", email = "onefivesevenceo@gmail.com" }
-]
-requires-python = ">=3.14"
+requires-python = ">=3.11"
 dependencies = [
-    "alembic>=1.20.0",
-    "fastapi>=0.143.1",
-    "pydantic>=2.14.1",
-    "sqlalchemy>=2.1.4",
+    "alembic>=1.13.0",
+    "fastapi>=0.110.0",
+    "pydantic>=2.6.0",
+    "sqlalchemy>=2.0.0",
 ]
 
 [project.scripts]
-git = "git:main"
+capital-tracker = "src.main:main"
 
 [build-system]
 requires = ["uv_build>=0.13.1,<0.14.0"]
 build-backend = "uv_build"
 
+[tool.uv.build-backend]
+module-name = "src"
+module-root = "."
+
 [dependency-groups]
 dev = [
-    "mypy>=2.4.0",
-    "pytest>=9.1.1",
-    "ruff>=0.17.0",
+    "mypy>=1.9.0",
+    "pytest>=8.0.0",
+    "ruff>=0.3.0",
 ]
+
+[tool.ruff]
+line-length = 88
+target-version = "py311"
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "N", "UP", "B", "A", "C4", "SIM"]
+ignore = []
+
+[tool.mypy]
+python_version = "3.11"
+strict = true
+ignore_missing_imports = true
