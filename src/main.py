@@ -41,7 +41,11 @@ def main() -> None:
         account_repo=account_repo,
         category_repo=category_repo,
     )
-    budget_service = BudgetService(budget_repo, transaction_repo)
+    budget_service = BudgetService(
+        budget_repo=budget_repo,
+        tx_repo=transaction_repo,
+        category_repo=category_repo,
+    )
     export_service = ExportService(account_repo, category_repo)
 
     cli_app = TerminalInterface(

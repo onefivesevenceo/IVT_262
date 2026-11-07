@@ -1,13 +1,32 @@
 from decimal import Decimal, InvalidOperation
 from enum import IntEnum
+from typing import TypeVar
 
 from src.models.account import AccountType
+from src.models.category import CategoryDirection
 from src.models.transaction import TransactionType
 from src.services.account_service import AccountService
 from src.services.budget_service import BudgetService
 from src.services.category_service import CategoryService
 from src.services.export_service import ExportService
 from src.services.transaction_service import TransactionService
+
+T = TypeVar("T", bound=IntEnum)
+
+
+class MainMenuChoice(IntEnum):
+    """Пункты главного меню консольного интерфейса."""
+
+    SHOW_ACCOUNTS = 1
+    CREATE_ACCOUNT = 2
+    ADD_TRANSACTION = 3
+    TRANSFER = 4
+    SHOW_HISTORY = 5
+    BUDGET_STATUS = 6
+    DELETE_TRANSACTION = 7
+    EXPORT_CSV = 8
+    ARCHIVE_ACCOUNT = 9
+    EXIT = 0
 
 
 class AccountTypeChoice(IntEnum):
@@ -37,9 +56,22 @@ class TransactionKindChoice(IntEnum):
 
     @property
     def to_domain(self) -> TransactionType:
-        if self == TransactionKindChoice.EXPENSE:
+        if self is TransactionKindChoice.EXPENSE:
             return TransactionType.EXPENSE
         return TransactionType.INCOME
+
+    @property
+    def category_direction(self) -> CategoryDirection:
+        if self is TransactionKindChoice.EXPENSE:
+            return CategoryDirection.EXPENSE
+        return CategoryDirection.INCOME
+
+
+class BudgetActionChoice(IntEnum):
+    """Выбор действия в подменю бюджетов."""
+
+    SET_LIMIT = 1
+    CHECK_STATUS = 2
 
 
 class TerminalInterface:
@@ -66,31 +98,29 @@ class TerminalInterface:
         self._cat_svc.seed_defaults(self._user_id)
         while True:
             self._print_header()
-            choice = input("Выберите пункт меню [0-9]: ").strip()
+            choice = self._read_choice("Выберите пункт меню [0-9]: ", MainMenuChoice)
 
-            if choice == "1":
+            if choice is MainMenuChoice.SHOW_ACCOUNTS:
                 self._handle_show_accounts()
-            elif choice == "2":
+            elif choice is MainMenuChoice.CREATE_ACCOUNT:
                 self._handle_create_account()
-            elif choice == "3":
+            elif choice is MainMenuChoice.ADD_TRANSACTION:
                 self._handle_add_transaction()
-            elif choice == "4":
+            elif choice is MainMenuChoice.TRANSFER:
                 self._handle_transfer()
-            elif choice == "5":
+            elif choice is MainMenuChoice.SHOW_HISTORY:
                 self._handle_show_history()
-            elif choice == "6":
+            elif choice is MainMenuChoice.BUDGET_STATUS:
                 self._handle_budget_status()
-            elif choice == "7":
+            elif choice is MainMenuChoice.DELETE_TRANSACTION:
                 self._handle_delete_transaction()
-            elif choice == "8":
+            elif choice is MainMenuChoice.EXPORT_CSV:
                 self._handle_export_csv()
-            elif choice == "9":
+            elif choice is MainMenuChoice.ARCHIVE_ACCOUNT:
                 self._handle_archive_account()
-            elif choice == "0":
+            elif choice is MainMenuChoice.EXIT:
                 print("\nЗавершение сеанса. Данные сохранены.")
                 break
-            else:
-                print("\n[!] Некорректный выбор. Повторите ввод.")
 
     def _print_header(self) -> None:
         """Отображает верхнюю информационную плашку."""
@@ -110,18 +140,15 @@ class TerminalInterface:
         print("0. Выход")
         print("-" * 55)
 
-    def _read_choice(self, prompt: str, enum_cls: type[IntEnum]) -> IntEnum:
+    def _read_choice(self, prompt: str, enum_cls: type[T]) -> T:
         """Безопасное считывание выбора пользователя из перечисления."""
         while True:
             raw = input(prompt).strip()
-            if not raw.isdigit():
-                print("[!] Ошибка: введите целое число.")
-                continue
             try:
                 return enum_cls(int(raw))
             except ValueError:
                 valid_keys = ", ".join(str(e.value) for e in enum_cls)
-                print(f"[!] Неверный выбор. Варианты: {valid_keys}")
+                print(f"[!] Неверный выбор. Допустимые варианты: {valid_keys}")
 
     def _handle_show_accounts(self) -> None:
         """Показывает перечень счетов."""
@@ -153,9 +180,7 @@ class TerminalInterface:
             if not balance.is_finite():
                 print("[!] Ошибка: баланс должен быть конечным числом.")
                 return
-            acc = self._acc_svc.create_account(
-                self._user_id, name, acc_type, balance
-            )
+            acc = self._acc_svc.create_account(self._user_id, name, acc_type, balance)
             print(
                 f"[OK] Счет '{acc.name}' успешно открыт "
                 f"с балансом {acc.balance:.2f} руб."
@@ -190,7 +215,9 @@ class TerminalInterface:
         choice = self._read_choice("Выберите тип [1-2]: ", TransactionKindChoice)
         tx_type = choice.to_domain
 
-        categories = self._cat_svc.get_user_categories(self._user_id)
+        categories = self._cat_svc.get_categories_by_direction(
+            self._user_id, choice.category_direction
+        )
         print("Доступные категории:")
         for cat in categories:
             print(f"  [{cat.id}] {cat.name} ({cat.direction.value})")
@@ -247,20 +274,21 @@ class TerminalInterface:
     def _handle_budget_status(self) -> None:
         """Проверяет освоение бюджета."""
         print("1. Установить лимит, 2. Проверить статус")
-        sub = input("Выбор: ").strip()
+        action = self._read_choice("Выбор [1-2]: ", BudgetActionChoice)
+
         raw_month = input("Месяц [1-12]: ").strip()
         raw_year = input("Год [например, 2026]: ").strip()
-        if not (raw_month.isdigit() and raw_year.isdigit()):
+        try:
+            month = int(raw_month)
+            year = int(raw_year)
+        except ValueError:
             print("[!] Некорректный месяц или год.")
             return
-        month = int(raw_month)
-        year = int(raw_year)
 
-        if not 1 <= month <= 12:
-            print("[!] Ошибка: номер месяца должен быть в диапазоне от 1 до 12.")
-            return
-
-        categories = self._cat_svc.get_user_categories(self._user_id)
+        categories = self._cat_svc.get_categories_by_direction(
+            self._user_id, CategoryDirection.EXPENSE
+        )
+        print("Категории расходов:")
         for cat in categories:
             print(f"  [{cat.id}] {cat.name}")
         raw_cat = input("ID категории: ").strip()
@@ -269,26 +297,22 @@ class TerminalInterface:
             return
         cat_id = int(raw_cat)
 
-        if sub == "1":
+        if action is BudgetActionChoice.SET_LIMIT:
             raw_lim = input("Лимит (руб): ").strip()
             try:
                 lim = Decimal(raw_lim)
-                self._bdg_svc.set_budget(
-                    self._user_id, cat_id, month, year, lim
-                )
+                self._bdg_svc.set_budget(self._user_id, cat_id, month, year, lim)
                 print("[OK] Лимит успешно установлен.")
-            except (InvalidOperation, ValueError) as err:
+            except (InvalidOperation, ValueError, PermissionError) as err:
                 print(f"[!] Ошибка: {err}")
         else:
             try:
                 spent, ratio, ind = self._bdg_svc.calculate_status(
                     self._user_id, cat_id, month, year
                 )
-                print(
-                    f"Потрачено: {spent:.2f} руб. ({ratio:.1f}%) | Статус: {ind}"
-                )
+                print(f"Потрачено: {spent:.2f} руб. ({ratio:.1f}%) | Статус: {ind}")
             except ValueError as err:
-                print(f"[!] {err}")
+                print(f"[!] Ошибка: {err}")
 
     def _handle_delete_transaction(self) -> None:
         """Удаляет транзакцию с откатом сальдо."""
@@ -300,9 +324,7 @@ class TerminalInterface:
         tx_id = int(raw_tx_id)
         try:
             self._tx_svc.delete_transaction(tx_id, self._user_id)
-            print(
-                "[OK] Транзакция удалена, остаток счета автоматически восстановлен."
-            )
+            print("[OK] Транзакция удалена, остаток счета автоматически восстановлен.")
         except (ValueError, PermissionError) as err:
             print(f"[!] Ошибка: {err}")
 

@@ -38,19 +38,13 @@ class TransactionService:
 
         account = self._account_repo.get_by_id(account_id)
         if not account or account.user_id != user_id:
-            msg = (
-                "Указанный счет не существует "
-                "или принадлежит другому пользователю."
-            )
+            msg = "Указанный счет не существует или принадлежит другому пользователю."
             raise PermissionError(msg)
 
         if category_id is not None and self._category_repo is not None:
             category = self._category_repo.get_by_id(category_id)
             if not category or category.user_id != user_id:
-                msg = (
-                    "Категория не найдена "
-                    "или принадлежит другому пользователю."
-                )
+                msg = "Категория не найдена или принадлежит другому пользователю."
                 raise PermissionError(msg)
 
             if (
@@ -143,24 +137,16 @@ class TransactionService:
             raise ValueError(msg)
 
         if tx.transaction_type == TransactionType.EXPENSE:
-            self._account_repo.update_balance(
-                account.id, account.balance + tx.amount
-            )
+            self._account_repo.update_balance(account.id, account.balance + tx.amount)
         elif tx.transaction_type == TransactionType.INCOME:
-            self._account_repo.update_balance(
-                account.id, account.balance - tx.amount
-            )
+            self._account_repo.update_balance(account.id, account.balance - tx.amount)
         elif tx.transaction_type == TransactionType.TRANSFER and tx.to_account_id:
             target = self._account_repo.get_by_id(tx.to_account_id)
             if not target:
                 msg = "Целевой счет перевода не найден для отката операции."
                 raise ValueError(msg)
-            self._account_repo.update_balance(
-                account.id, account.balance + tx.amount
-            )
-            self._account_repo.update_balance(
-                target.id, target.balance - tx.amount
-            )
+            self._account_repo.update_balance(account.id, account.balance + tx.amount)
+            self._account_repo.update_balance(target.id, target.balance - tx.amount)
 
         self._tx_repo.delete(transaction_id)
 

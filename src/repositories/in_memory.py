@@ -91,11 +91,7 @@ class InMemoryTransactionRepository(TransactionRepository):
 
     def get_all_by_user(self, user_id: int) -> list[Transaction]:
         """Возвращает историю операций пользователя."""
-        return [
-            tx
-            for tx in self._storage.values()
-            if tx.user_id == user_id
-        ]
+        return [tx for tx in self._storage.values() if tx.user_id == user_id]
 
     def delete(self, tx_id: int) -> None:
         """Удаляет запись транзакции по первичному ключу."""
@@ -157,8 +153,4 @@ class InMemoryCategoryRepository(CategoryRepository):
 
     def get_all_by_user(self, user_id: int) -> list[Category]:
         """Возвращает список категорий пользователя."""
-        return [
-            cat
-            for cat in self._storage.values()
-            if cat.user_id == user_id
-        ]
+        return [cat for cat in self._storage.values() if cat.user_id == user_id]
