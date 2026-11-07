@@ -6,3 +6,4 @@ __pycache__/
 *.py[cod]
 dist/
 transactions_export.csv
+transactions_export.csv
