@@ -3,11 +3,9 @@ from decimal import Decimal
 
 from src.models.category import CategoryDirection
 from src.models.transaction import Transaction, TransactionType
-from src.repositories.base import (
-    AccountRepository,
-    CategoryRepository,
-    TransactionRepository,
-)
+from src.repositories.account import AccountRepository
+from src.repositories.category import CategoryRepository
+from src.repositories.transaction import TransactionRepository
 
 
 class TransactionService:

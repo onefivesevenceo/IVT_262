@@ -28,7 +28,7 @@ class InMemoryTransactionRepository(TransactionRepository):
 
     def __init__(self) -> None:
         self._storage: dict[int, Transaction] = {}
-        self._seq = 1
+        self._seq: int = 1
 
     def add(self, tx: Transaction) -> Transaction:
         """Сохраняет транзакцию в памяти."""

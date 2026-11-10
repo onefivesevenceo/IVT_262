@@ -33,7 +33,7 @@ class InMemoryAccountRepository(AccountRepository):
 
     def __init__(self) -> None:
         self._storage: dict[int, Account] = {}
-        self._seq = 1
+        self._seq: int = 1
 
     def add(self, account: Account) -> Account:
         """Добавляет счет в оперативную память."""

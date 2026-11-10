@@ -15,7 +15,7 @@ from src.repositories.transaction import (
     TransactionRepository,
 )
 
-all = [
+__all__ = [
     "AccountRepository",
     "BudgetRepository",
     "CategoryRepository",

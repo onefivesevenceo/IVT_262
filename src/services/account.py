@@ -1,7 +1,7 @@
 from decimal import Decimal
 
 from src.models.account import Account, AccountType
-from src.repositories.base import AccountRepository
+from src.repositories.account import AccountRepository
 
 
 class AccountService:

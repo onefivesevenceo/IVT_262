@@ -3,11 +3,9 @@ from decimal import Decimal
 from src.models.budget import BudgetLimit
 from src.models.category import CategoryDirection
 from src.models.transaction import TransactionType
-from src.repositories.base import (
-    BudgetRepository,
-    CategoryRepository,
-    TransactionRepository,
-)
+from src.repositories.budget import BudgetRepository
+from src.repositories.category import CategoryRepository
+from src.repositories.transaction import TransactionRepository
 
 
 class BudgetService:

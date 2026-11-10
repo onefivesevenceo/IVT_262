@@ -1,5 +1,5 @@
 from src.models.category import Category, CategoryDirection
-from src.repositories.base import CategoryRepository
+from src.repositories.category import CategoryRepository
 
 
 class CategoryService:

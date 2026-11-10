@@ -2,7 +2,8 @@ import csv
 import io
 
 from src.models.transaction import Transaction
-from src.repositories.base import AccountRepository, CategoryRepository
+from src.repositories.account import AccountRepository
+from src.repositories.category import CategoryRepository
 
 
 class ExportService:

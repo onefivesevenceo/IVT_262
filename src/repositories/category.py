@@ -24,7 +24,7 @@ class InMemoryCategoryRepository(CategoryRepository):
 
     def __init__(self) -> None:
         self._storage: dict[int, Category] = {}
-        self._seq = 1
+        self._seq: int = 1
 
     def add(self, category: Category) -> Category:
         """Добавляет категорию в память."""

@@ -4,7 +4,7 @@ from src.services.category import CategoryService
 from src.services.export import ExportService
 from src.services.transaction import TransactionService
 
-all = [
+__all__ = [
     "AccountService",
     "BudgetService",
     "CategoryService",
