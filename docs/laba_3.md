@@ -93,28 +93,30 @@ capital-tracker/
 │   └── laba_3.md
 └── src/
     ├── __init__.py
-    ├── main.py                     <-- Минималистичная точка входа
+    ├── main.py                     <-- Минималистичная точка входа и DI
     ├── cli/
     │   ├── __init__.py
-    │   └── terminal_interface.py   <-- Консольное меню взаимодействия
+    │   └── terminal_interface.py   <-- Консольное меню (MainMenuChoice, IntEnum)
     ├── models/
     │   ├── __init__.py
-    │   ├── account.py              <-- Модели счетов
-    │   ├── category.py             <-- Модели категорий
-    │   ├── transaction.py          <-- Модели транзакций
-    │   ├── budget.py               <-- Модели бюджетов
-    │   └── user.py                 <-- Модели пользователей
+    │   ├── account.py              <-- Доменная модель счета и типов AccountType
+    │   ├── budget.py               <-- Модель лимита расходов BudgetLimit
+    │   ├── category.py             <-- Модель категории и направления CategoryDirection
+    │   ├── transaction.py          <-- Модель транзакции и типов TransactionType
+    │   └── user.py                 <-- Модель пользователя
     ├── repositories/
-    │   ├── __init__.py
-    │   ├── base.py                 <-- Абстрактные интерфейсы хранилища (ABC)
-    │   └── in_memory.py            <-- Реализация репозиториев в памяти
+    │   ├── __init__.py             <-- Единый фасад слоя репозиториев
+    │   ├── account.py              <-- Интерфейс и In-Memory хранилище счетов
+    │   ├── budget.py               <-- Интерфейс и In-Memory хранилище бюджетов
+    │   ├── category.py             <-- Интерфейс и In-Memory хранилище категорий
+    │   └── transaction.py          <-- Интерфейс и In-Memory журнал операций
     └── services/
-        ├── __init__.py
-        ├── account_service.py      <-- Бизнес-логика счетов
-        ├── category_service.py     <-- Бизнес-логика категорий и сидирования
-        ├── transaction_service.py  <-- Бизнес-логика транзакций и переводов
-        ├── budget_service.py       <-- Бизнес-логика лимитов и предупреждений
-        └── export_service.py       <-- Реализация доработки: экспорт в CSV
+        ├── __init__.py             <-- Единый фасад прикладного сервисного слоя
+        ├── account.py              <-- Бизнес-логика счетов, сальдо и архивации
+        ├── budget.py               <-- Валидация лимитов, периодов и индикация
+        ├── category.py             <-- Фильтрация по направлению и seed категорий
+        ├── export.py               <-- Сериализация журнала в поток CSV UTF-8 BOM
+        └── transaction.py          <-- Атомарные проводки, переводы и откат балансов
 ```
 
 ---
@@ -272,15 +274,13 @@ class BudgetLimit:
 
 ---
 
-### 4.2. Абстракции хранилищ (`src/repositories/base.py`)
+### 4.2. Слой хранилищ (src/repositories/)
+src/repositories/account.py
 ```python
 from abc import ABC, abstractmethod
 from decimal import Decimal
 
 from src.models.account import Account
-from src.models.budget import BudgetLimit
-from src.models.category import Category
-from src.models.transaction import Transaction
 
 
 class AccountRepository(ABC):
@@ -307,80 +307,12 @@ class AccountRepository(ABC):
         """Помечает счет как архивный."""
 
 
-class TransactionRepository(ABC):
-    """Абстрактный контракт взаимодействия с журналом транзакций."""
-
-    @abstractmethod
-    def add(self, transaction: Transaction) -> Transaction:
-        """Сохраняет новую транзакцию."""
-
-    @abstractmethod
-    def get_by_id(self, transaction_id: int) -> Transaction | None:
-        """Возвращает транзакцию по идентификатору."""
-
-    @abstractmethod
-    def get_all_by_user(self, user_id: int) -> list[Transaction]:
-        """Возвращает все операции конкретного пользователя."""
-
-    @abstractmethod
-    def delete(self, transaction_id: int) -> None:
-        """Удаляет операцию из журнала."""
-
-
-class BudgetRepository(ABC):
-    """Абстрактный контракт управления лимитами бюджетов."""
-
-    @abstractmethod
-    def set_limit(self, budget: BudgetLimit) -> BudgetLimit:
-        """Устанавливает или обновляет лимит."""
-
-    @abstractmethod
-    def get_limit(
-        self, user_id: int, category_id: int, month: int, year: int
-    ) -> BudgetLimit | None:
-        """Возвращает лимит на указанный период."""
-
-
-class CategoryRepository(ABC):
-    """Абстрактный контракт управления справочником категорий."""
-
-    @abstractmethod
-    def add(self, category: Category) -> Category:
-        """Добавляет категорию."""
-
-    @abstractmethod
-    def get_by_id(self, category_id: int) -> Category | None:
-        """Возвращает категорию по ID."""
-
-    @abstractmethod
-    def get_all_by_user(self, user_id: int) -> list[Category]:
-        """Возвращает список категорий пользователя."""
-```
-
----
-
-### 4.3. In-Memory реализация хранилищ (`src/repositories/in_memory.py`)
-```python
-from decimal import Decimal
-
-from src.models.account import Account
-from src.models.budget import BudgetLimit
-from src.models.category import Category
-from src.models.transaction import Transaction
-from src.repositories.base import (
-    AccountRepository,
-    BudgetRepository,
-    CategoryRepository,
-    TransactionRepository,
-)
-
-
 class InMemoryAccountRepository(AccountRepository):
     """Хранилище счетов в оперативной памяти."""
 
     def __init__(self) -> None:
         self._storage: dict[int, Account] = {}
-        self._seq = 1
+        self._seq: int = 1
 
     def add(self, account: Account) -> Account:
         """Добавляет счет в оперативную память."""
@@ -409,7 +341,7 @@ class InMemoryAccountRepository(AccountRepository):
         ]
 
     def update_balance(self, account_id: int, new_balance: Decimal) -> None:
-        """Обновляет остаток счета. Если счет не найден — бросает ошибку."""
+        """Обновляет остаток счета. Если не найден — выбрасывает ошибку."""
         account = self.get_by_id(account_id)
         if not account:
             msg = f"Счет с ID {account_id} не найден для обновления баланса."
@@ -417,12 +349,138 @@ class InMemoryAccountRepository(AccountRepository):
         account.balance = new_balance
 
     def archive(self, account_id: int) -> None:
-        """Помечает счет как архивный. Если счет не найден — бросает ошибку."""
+        """Помечает счет как архивный. Если не найден — выбрасывает ошибку."""
         account = self.get_by_id(account_id)
         if not account:
             msg = f"Счет с ID {account_id} не найден для архивации."
             raise ValueError(msg)
         account.is_archived = True
+```
+#### src/repositories/category.py
+```python
+from abc import ABC, abstractmethod
+
+from src.models.category import Category
+
+
+class CategoryRepository(ABC):
+    """Абстрактный контракт управления справочником категорий."""
+
+    @abstractmethod
+    def add(self, category: Category) -> Category:
+        """Добавляет категорию."""
+
+    @abstractmethod
+    def get_by_id(self, category_id: int) -> Category | None:
+        """Возвращает категорию по ID."""
+
+    @abstractmethod
+    def get_all_by_user(self, user_id: int) -> list[Category]:
+        """Возвращает список категорий пользователя."""
+
+
+class InMemoryCategoryRepository(CategoryRepository):
+    """Хранилище категорий классификации операций в оперативной памяти."""
+
+    def __init__(self) -> None:
+        self._storage: dict[int, Category] = {}
+        self._seq: int = 1
+
+    def add(self, category: Category) -> Category:
+        """Добавляет категорию в память."""
+        saved = Category(
+            id=self._seq,
+            user_id=category.user_id,
+            name=category.name,
+            direction=category.direction,
+        )
+        self._storage[self._seq] = saved
+        self._seq += 1
+        return saved
+
+    def get_by_id(self, category_id: int) -> Category | None:
+        """Возвращает категорию по ID."""
+        return self._storage.get(category_id)
+
+    def get_all_by_user(self, user_id: int) -> list[Category]:
+        """Возвращает список категорий пользователя."""
+        return [cat for cat in self._storage.values() if cat.user_id == user_id]
+```
+#### src/repositories/budget.py
+```python
+from abc import ABC, abstractmethod
+
+from src.models.budget import BudgetLimit
+
+
+class BudgetRepository(ABC):
+    """Абстрактный контракт управления лимитами бюджетов."""
+
+    @abstractmethod
+    def set_limit(self, budget: BudgetLimit) -> BudgetLimit:
+        """Устанавливает или обновляет лимит."""
+
+    @abstractmethod
+    def get_limit(
+        self, user_id: int, category_id: int, month: int, year: int
+    ) -> BudgetLimit | None:
+        """Возвращает лимит на указанный период."""
+
+
+class InMemoryBudgetRepository(BudgetRepository):
+    """Хранилище месячных лимитов бюджетов в оперативной памяти."""
+
+    def __init__(self) -> None:
+        self._storage: dict[str, BudgetLimit] = {}
+        self._seq: int = 1
+
+    def set_limit(self, budget: BudgetLimit) -> BudgetLimit:
+        """Устанавливает или перезаписывает лимит."""
+        key = f"{budget.user_id}:{budget.category_id}:{budget.month}:{budget.year}"
+        saved = BudgetLimit(
+            id=self._seq,
+            user_id=budget.user_id,
+            category_id=budget.category_id,
+            month=budget.month,
+            year=budget.year,
+            limit_amount=budget.limit_amount,
+        )
+        self._storage[key] = saved
+        self._seq += 1
+        return saved
+
+    def get_limit(
+        self, user_id: int, category_id: int, month: int, year: int
+    ) -> BudgetLimit | None:
+        """Возвращает лимит по ключу периода."""
+        key = f"{user_id}:{category_id}:{month}:{year}"
+        return self._storage.get(key)
+```
+#### src/repositories/transaction.py
+```python
+from abc import ABC, abstractmethod
+
+from src.models.transaction import Transaction
+
+
+class TransactionRepository(ABC):
+    """Абстрактный контракт взаимодействия с журналом транзакций."""
+
+    @abstractmethod
+    def add(self, transaction: Transaction) -> Transaction:
+        """Сохраняет новую транзакцию."""
+
+    @abstractmethod
+    def get_by_id(self, transaction_id: int) -> Transaction | None:
+        """Возвращает транзакцию по идентификатору."""
+
+    @abstractmethod
+    def get_all_by_user(self, user_id: int) -> list[Transaction]:
+        """Возвращает все операции конкретного пользователя."""
+
+    @abstractmethod
+    def delete(self, transaction_id: int) -> None:
+        """Удаляет операцию из журнала."""
 
 
 class InMemoryTransactionRepository(TransactionRepository):
@@ -430,7 +488,7 @@ class InMemoryTransactionRepository(TransactionRepository):
 
     def __init__(self) -> None:
         self._storage: dict[int, Transaction] = {}
-        self._seq = 1
+        self._seq: int = 1
 
     def add(self, tx: Transaction) -> Transaction:
         """Сохраняет транзакцию в памяти."""
@@ -459,76 +517,17 @@ class InMemoryTransactionRepository(TransactionRepository):
     def delete(self, tx_id: int) -> None:
         """Удаляет запись транзакции по первичному ключу."""
         self._storage.pop(tx_id, None)
-
-
-class InMemoryBudgetRepository(BudgetRepository):
-    """Хранилище месячных лимитов бюджетов в оперативной памяти."""
-
-    def __init__(self) -> None:
-        self._storage: dict[str, BudgetLimit] = {}
-        self._seq = 1
-
-    def set_limit(self, budget: BudgetLimit) -> BudgetLimit:
-        """Устанавливает или перезаписывает лимит."""
-        key = f"{budget.user_id}:{budget.category_id}:{budget.month}:{budget.year}"
-        saved = BudgetLimit(
-            id=self._seq,
-            user_id=budget.user_id,
-            category_id=budget.category_id,
-            month=budget.month,
-            year=budget.year,
-            limit_amount=budget.limit_amount,
-        )
-        self._storage[key] = saved
-        self._seq += 1
-        return saved
-
-    def get_limit(
-        self, user_id: int, category_id: int, month: int, year: int
-    ) -> BudgetLimit | None:
-        """Возвращает лимит по ключу периода."""
-        key = f"{user_id}:{category_id}:{month}:{year}"
-        return self._storage.get(key)
-
-
-class InMemoryCategoryRepository(CategoryRepository):
-    """Хранилище категорий классификации операций в оперативной памяти."""
-
-    def __init__(self) -> None:
-        self._storage: dict[int, Category] = {}
-        self._seq = 1
-
-    def add(self, category: Category) -> Category:
-        """Добавляет категорию в память."""
-        saved = Category(
-            id=self._seq,
-            user_id=category.user_id,
-            name=category.name,
-            direction=category.direction,
-        )
-        self._storage[self._seq] = saved
-        self._seq += 1
-        return saved
-
-    def get_by_id(self, category_id: int) -> Category | None:
-        """Возвращает категорию по ID."""
-        return self._storage.get(category_id)
-
-    def get_all_by_user(self, user_id: int) -> list[Category]:
-        """Возвращает список категорий пользователя."""
-        return [cat for cat in self._storage.values() if cat.user_id == user_id]
 ```
-
 ---
 
-### 4.4. Сервисный слой ядра (`src/services/`)
+### 4.3. Сервисный слой ядра (`src/services/`)
 
-#### `src/services/account_service.py`
+#### `src/services/account.py`
 ```python
 from decimal import Decimal
 
 from src.models.account import Account, AccountType
-from src.repositories.base import AccountRepository
+from src.repositories.account import AccountRepository
 
 
 class AccountService:
@@ -572,10 +571,10 @@ class AccountService:
         self._repo.archive(account_id)
 ```
 
-#### `src/services/category_service.py`
+#### `src/services/category.py`
 ```python
 from src.models.category import Category, CategoryDirection
-from src.repositories.base import CategoryRepository
+from src.repositories.category import CategoryRepository
 
 
 class CategoryService:
@@ -588,9 +587,15 @@ class CategoryService:
         """Инициализирует базовые категории для пользователя."""
         existing = self._repo.get_all_by_user(user_id)
         if not existing:
-            self._repo.add(Category(0, user_id, "Продукты", CategoryDirection.EXPENSE))
-            self._repo.add(Category(0, user_id, "Кафе", CategoryDirection.EXPENSE))
-            self._repo.add(Category(0, user_id, "Зарплата", CategoryDirection.INCOME))
+            self._repo.add(
+                Category(0, user_id, "Продукты", CategoryDirection.EXPENSE)
+            )
+            self._repo.add(
+                Category(0, user_id, "Кафе", CategoryDirection.EXPENSE)
+            )
+            self._repo.add(
+                Category(0, user_id, "Зарплата", CategoryDirection.INCOME)
+            )
 
     def get_user_categories(self, user_id: int) -> list[Category]:
         """Возвращает все доступные категории пользователя."""
@@ -611,18 +616,131 @@ class CategoryService:
         return self._repo.get_by_id(category_id)
 ```
 
-#### `src/services/transaction_service.py`
+#### `src/services/budget.py`
+```python
+from decimal import Decimal
+
+from src.models.budget import BudgetLimit
+from src.models.category import CategoryDirection
+from src.models.transaction import TransactionType
+from src.repositories.budget import BudgetRepository
+from src.repositories.category import CategoryRepository
+from src.repositories.transaction import TransactionRepository
+
+
+class BudgetService:
+    """Сервис контроля лимитов и расчета освоения бюджетов."""
+
+    def __init__(
+        self,
+        budget_repo: BudgetRepository,
+        tx_repo: TransactionRepository,
+        category_repo: CategoryRepository | None = None,
+    ) -> None:
+        self._budget_repo = budget_repo
+        self._tx_repo = tx_repo
+        self._category_repo = category_repo
+
+    @staticmethod
+    def _validate_period(month: int, year: int) -> None:
+        """Проверяет корректность календарного месяца и года."""
+        if not 1 <= month <= 12:
+            msg = "Номер месяца должен находиться в диапазоне от 1 до 12."
+            raise ValueError(msg)
+        if year < 1970 or year > 2100:
+            msg = "Указан некорректный календарный год."
+            raise ValueError(msg)
+
+    def set_budget(
+        self,
+        user_id: int,
+        category_id: int,
+        month: int,
+        year: int,
+        limit_amount: Decimal,
+    ) -> BudgetLimit:
+        """Устанавливает лимит бюджета на календарный месяц."""
+        self._validate_period(month, year)
+
+        if not limit_amount.is_finite() or limit_amount <= Decimal("0.00"):
+            msg = "Лимит бюджета обязан быть конечным положительным числом."
+            raise ValueError(msg)
+
+        if self._category_repo is not None:
+            category = self._category_repo.get_by_id(category_id)
+            if not category or category.user_id != user_id:
+                msg = (
+                    "Категория не найдена "
+                    "или принадлежит другому пользователю."
+                )
+                raise PermissionError(msg)
+            if category.direction != CategoryDirection.EXPENSE:
+                msg = (
+                    "Бюджетный лимит можно установить "
+                    "только для категории расходов."
+                )
+                raise ValueError(msg)
+
+        budget = BudgetLimit(
+            id=0,
+            user_id=user_id,
+            category_id=category_id,
+            month=month,
+            year=year,
+            limit_amount=limit_amount,
+        )
+        return self._budget_repo.set_limit(budget)
+
+    def calculate_status(
+        self, user_id: int, category_id: int, month: int, year: int
+    ) -> tuple[Decimal, Decimal, str]:
+        """Рассчитывает сумму расходов, процент освоения и цветовой статус."""
+        self._validate_period(month, year)
+
+        budget = self._budget_repo.get_limit(user_id, category_id, month, year)
+        if not budget:
+            msg = "Бюджетный лимит на указанный период не установлен."
+            raise ValueError(msg)
+
+        txs = self._tx_repo.get_all_by_user(user_id)
+        spent = sum(
+            (
+                tx.amount
+                for tx in txs
+                if tx.category_id == category_id
+                and tx.transaction_type == TransactionType.EXPENSE
+                and tx.timestamp.month == month
+                and tx.timestamp.year == year
+            ),
+            Decimal("0.00"),
+        )
+
+        ratio = (
+            (spent / budget.limit_amount) * Decimal("100.0")
+            if budget.limit_amount > 0
+            else Decimal("0.0")
+        )
+
+        if ratio < Decimal("80.0"):
+            indicator = "GREEN (Штатный режим)"
+        elif ratio <= Decimal("100.0"):
+            indicator = "YELLOW (Внимание, приближение к лимиту)"
+        else:
+            indicator = "RED (Лимит превышен)"
+
+        return spent, ratio, indicator
+```
+
+#### `src/services/transaction.py`
 ```python
 from datetime import datetime
 from decimal import Decimal
 
 from src.models.category import CategoryDirection
 from src.models.transaction import Transaction, TransactionType
-from src.repositories.base import (
-    AccountRepository,
-    CategoryRepository,
-    TransactionRepository,
-)
+from src.repositories.account import AccountRepository
+from src.repositories.category import CategoryRepository
+from src.repositories.transaction import TransactionRepository
 
 
 class TransactionService:
@@ -653,13 +771,19 @@ class TransactionService:
 
         account = self._account_repo.get_by_id(account_id)
         if not account or account.user_id != user_id:
-            msg = "Указанный счет не существует или принадлежит другому пользователю."
+            msg = (
+                "Указанный счет не существует "
+                "или принадлежит другому пользователю."
+            )
             raise PermissionError(msg)
 
         if category_id is not None and self._category_repo is not None:
             category = self._category_repo.get_by_id(category_id)
             if not category or category.user_id != user_id:
-                msg = "Категория не найдена или принадлежит другому пользователю."
+                msg = (
+                    "Категория не найдена "
+                    "или принадлежит другому пользователю."
+                )
                 raise PermissionError(msg)
 
             if (
@@ -752,16 +876,24 @@ class TransactionService:
             raise ValueError(msg)
 
         if tx.transaction_type == TransactionType.EXPENSE:
-            self._account_repo.update_balance(account.id, account.balance + tx.amount)
+            self._account_repo.update_balance(
+                account.id, account.balance + tx.amount
+            )
         elif tx.transaction_type == TransactionType.INCOME:
-            self._account_repo.update_balance(account.id, account.balance - tx.amount)
+            self._account_repo.update_balance(
+                account.id, account.balance - tx.amount
+            )
         elif tx.transaction_type == TransactionType.TRANSFER and tx.to_account_id:
             target = self._account_repo.get_by_id(tx.to_account_id)
             if not target:
                 msg = "Целевой счет перевода не найден для отката операции."
                 raise ValueError(msg)
-            self._account_repo.update_balance(account.id, account.balance + tx.amount)
-            self._account_repo.update_balance(target.id, target.balance - tx.amount)
+            self._account_repo.update_balance(
+                account.id, account.balance + tx.amount
+            )
+            self._account_repo.update_balance(
+                target.id, target.balance - tx.amount
+            )
 
         self._tx_repo.delete(transaction_id)
 
@@ -770,124 +902,14 @@ class TransactionService:
         return self._tx_repo.get_all_by_user(user_id)
 ```
 
-#### `src/services/budget_service.py`
-```python
-from decimal import Decimal
-
-from src.models.budget import BudgetLimit
-from src.models.category import CategoryDirection
-from src.models.transaction import TransactionType
-from src.repositories.base import (
-    BudgetRepository,
-    CategoryRepository,
-    TransactionRepository,
-)
-
-
-class BudgetService:
-    """Сервис контроля лимитов и расчета освоения бюджетов."""
-
-    def __init__(
-        self,
-        budget_repo: BudgetRepository,
-        tx_repo: TransactionRepository,
-        category_repo: CategoryRepository | None = None,
-    ) -> None:
-        self._budget_repo = budget_repo
-        self._tx_repo = tx_repo
-        self._category_repo = category_repo
-
-    @staticmethod
-    def _validate_period(month: int, year: int) -> None:
-        """Проверяет корректность календарного месяца и года."""
-        if not 1 <= month <= 12:
-            msg = "Номер месяца должен находиться в диапазоне от 1 до 12."
-            raise ValueError(msg)
-        if year < 1970 or year > 2100:
-            msg = "Указан некорректный календарный год."
-            raise ValueError(msg)
-
-    def set_budget(
-        self,
-        user_id: int,
-        category_id: int,
-        month: int,
-        year: int,
-        limit_amount: Decimal,
-    ) -> BudgetLimit:
-        """Устанавливает лимит бюджета на календарный месяц."""
-        self._validate_period(month, year)
-
-        if not limit_amount.is_finite() or limit_amount <= Decimal("0.00"):
-            msg = "Лимит бюджета обязан быть конечным положительным числом."
-            raise ValueError(msg)
-
-        if self._category_repo is not None:
-            category = self._category_repo.get_by_id(category_id)
-            if not category or category.user_id != user_id:
-                msg = "Категория не найдена или принадлежит другому пользователю."
-                raise PermissionError(msg)
-            if category.direction != CategoryDirection.EXPENSE:
-                msg = "Бюджетный лимит можно установить только для категории расходов."
-                raise ValueError(msg)
-
-        budget = BudgetLimit(
-            id=0,
-            user_id=user_id,
-            category_id=category_id,
-            month=month,
-            year=year,
-            limit_amount=limit_amount,
-        )
-        return self._budget_repo.set_limit(budget)
-
-    def calculate_status(
-        self, user_id: int, category_id: int, month: int, year: int
-    ) -> tuple[Decimal, Decimal, str]:
-        """Рассчитывает сумму расходов, процент освоения и цветовой статус."""
-        self._validate_period(month, year)
-
-        budget = self._budget_repo.get_limit(user_id, category_id, month, year)
-        if not budget:
-            msg = "Бюджетный лимит на указанный период не установлен."
-            raise ValueError(msg)
-
-        txs = self._tx_repo.get_all_by_user(user_id)
-        spent = sum(
-            (
-                tx.amount
-                for tx in txs
-                if tx.category_id == category_id
-                and tx.transaction_type == TransactionType.EXPENSE
-                and tx.timestamp.month == month
-                and tx.timestamp.year == year
-            ),
-            Decimal("0.00"),
-        )
-
-        ratio = (
-            (spent / budget.limit_amount) * Decimal("100.0")
-            if budget.limit_amount > 0
-            else Decimal("0.0")
-        )
-
-        if ratio < Decimal("80.0"):
-            indicator = "GREEN (Штатный режим)"
-        elif ratio <= Decimal("100.0"):
-            indicator = "YELLOW (Внимание, приближение к лимиту)"
-        else:
-            indicator = "RED (Лимит превышен)"
-
-        return spent, ratio, indicator
-```
-
-#### `src/services/export_service.py`
+#### `src/services/export.py`
 ```python
 import csv
 import io
 
 from src.models.transaction import Transaction
-from src.repositories.base import AccountRepository, CategoryRepository
+from src.repositories.account import AccountRepository
+from src.repositories.category import CategoryRepository
 
 
 class ExportService:
@@ -937,7 +959,7 @@ class ExportService:
 
 ---
 
-### 4.5. Консольный терминальный интерфейс (`src/cli/terminal_interface.py`)
+### 4.4. Консольный терминальный интерфейс (`src/cli/terminal_interface.py`)
 ```python
 from decimal import Decimal, InvalidOperation
 from enum import IntEnum
@@ -946,11 +968,11 @@ from typing import TypeVar
 from src.models.account import AccountType
 from src.models.category import CategoryDirection
 from src.models.transaction import TransactionType
-from src.services.account_service import AccountService
-from src.services.budget_service import BudgetService
-from src.services.category_service import CategoryService
-from src.services.export_service import ExportService
-from src.services.transaction_service import TransactionService
+from src.services.account import AccountService
+from src.services.budget import BudgetService
+from src.services.category import CategoryService
+from src.services.export import ExportService
+from src.services.transaction import TransactionService
 
 T = TypeVar("T", bound=IntEnum)
 
@@ -1039,7 +1061,9 @@ class TerminalInterface:
         self._cat_svc.seed_defaults(self._user_id)
         while True:
             self._print_header()
-            choice = self._read_choice("Выберите пункт меню [0-9]: ", MainMenuChoice)
+            choice = self._read_choice(
+                "Выберите пункт меню [0-9]: ", MainMenuChoice
+            )
 
             if choice is MainMenuChoice.SHOW_ACCOUNTS:
                 self._handle_show_accounts()
@@ -1121,7 +1145,9 @@ class TerminalInterface:
             if not balance.is_finite():
                 print("[!] Ошибка: баланс должен быть конечным числом.")
                 return
-            acc = self._acc_svc.create_account(self._user_id, name, acc_type, balance)
+            acc = self._acc_svc.create_account(
+                self._user_id, name, acc_type, balance
+            )
             print(
                 f"[OK] Счет '{acc.name}' успешно открыт "
                 f"с балансом {acc.balance:.2f} руб."
@@ -1153,7 +1179,9 @@ class TerminalInterface:
         acc_id = int(raw_acc_id)
 
         print("Тип операции: 1. Расход, 2. Доход")
-        choice = self._read_choice("Выберите тип [1-2]: ", TransactionKindChoice)
+        choice = self._read_choice(
+            "Выберите тип [1-2]: ", TransactionKindChoice
+        )
         tx_type = choice.to_domain
 
         categories = self._cat_svc.get_categories_by_direction(
@@ -1174,7 +1202,9 @@ class TerminalInterface:
             self._tx_svc.register_transaction(
                 self._user_id, tx_type, amount, acc_id, cat_id
             )
-            print("[OK] Операция успешно зафиксирована, баланс счета пересчитан.")
+            print(
+                "[OK] Операция успешно зафиксирована, баланс счета пересчитан."
+            )
         except (InvalidOperation, ValueError, PermissionError) as err:
             print(f"[!] Ошибка: {err}")
 
@@ -1242,7 +1272,9 @@ class TerminalInterface:
             raw_lim = input("Лимит (руб): ").strip()
             try:
                 lim = Decimal(raw_lim)
-                self._bdg_svc.set_budget(self._user_id, cat_id, month, year, lim)
+                self._bdg_svc.set_budget(
+                    self._user_id, cat_id, month, year, lim
+                )
                 print("[OK] Лимит успешно установлен.")
             except (InvalidOperation, ValueError, PermissionError) as err:
                 print(f"[!] Ошибка: {err}")
@@ -1251,7 +1283,9 @@ class TerminalInterface:
                 spent, ratio, ind = self._bdg_svc.calculate_status(
                     self._user_id, cat_id, month, year
                 )
-                print(f"Потрачено: {spent:.2f} руб. ({ratio:.1f}%) | Статус: {ind}")
+                print(
+                    f"Потрачено: {spent:.2f} руб. ({ratio:.1f}%) | Статус: {ind}"
+                )
             except ValueError as err:
                 print(f"[!] Ошибка: {err}")
 
@@ -1265,7 +1299,9 @@ class TerminalInterface:
         tx_id = int(raw_tx_id)
         try:
             self._tx_svc.delete_transaction(tx_id, self._user_id)
-            print("[OK] Транзакция удалена, остаток счета автоматически восстановлен.")
+            print(
+                "[OK] Транзакция удалена, остаток счета автоматически восстановлен."
+            )
         except (ValueError, PermissionError) as err:
             print(f"[!] Ошибка: {err}")
 
@@ -1281,7 +1317,7 @@ class TerminalInterface:
 
 ---
 
-### 4.6. Минималистичная точка входа (`src/main.py`)
+### 4.5. Минималистичная точка входа (`src/main.py`)
 ```python
 """Точка входа в программу CapitalTracker.
 
@@ -1291,17 +1327,15 @@ class TerminalInterface:
 import sys
 
 from src.cli.terminal_interface import TerminalInterface
-from src.repositories.in_memory import (
-    InMemoryAccountRepository,
-    InMemoryBudgetRepository,
-    InMemoryCategoryRepository,
-    InMemoryTransactionRepository,
-)
-from src.services.account_service import AccountService
-from src.services.budget_service import BudgetService
-from src.services.category_service import CategoryService
-from src.services.export_service import ExportService
-from src.services.transaction_service import TransactionService
+from src.repositories.account import InMemoryAccountRepository
+from src.repositories.budget import InMemoryBudgetRepository
+from src.repositories.category import InMemoryCategoryRepository
+from src.repositories.transaction import InMemoryTransactionRepository
+from src.services.account import AccountService
+from src.services.budget import BudgetService
+from src.services.category import CategoryService
+from src.services.export import ExportService
+from src.services.transaction import TransactionService
 
 
 def main() -> None:
@@ -1365,6 +1399,9 @@ All checks passed!
 
 $ uv run ruff format --check src/
 19 files already formatted
+
+$ uv run mypy src/
+Success: no issues found in 15 source files
 ```
 
 ---
@@ -1408,7 +1445,6 @@ $ uv run ruff format --check src/
 Доступные категории:
   [1] Продукты (EXPENSE)
   [2] Кафе (EXPENSE)
-  [3] Зарплата (INCOME)
 Введите ID категории: 1
 Введите сумму: 1200.00
 [OK] Операция успешно зафиксирована, баланс счета пересчитан.
@@ -1420,6 +1456,5 @@ $ uv run ruff format --check src/
 Выберите пункт меню [0-9]: 8
 [OK] Данные выгружены в файл 'transactions_export.csv' в кодировке UTF-8.
 ```
-
 ---
 *Авторы отчета: студенты гр. ИВТ-262 ВолгГТУ Павловский И. Ю., Ларченко И. М. (2026 г.)*
