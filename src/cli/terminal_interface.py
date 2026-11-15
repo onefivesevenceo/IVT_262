@@ -5,11 +5,11 @@ from typing import TypeVar
 from src.models.account import AccountType
 from src.models.category import CategoryDirection
 from src.models.transaction import TransactionType
-from src.services.account_service import AccountService
-from src.services.budget_service import BudgetService
-from src.services.category_service import CategoryService
-from src.services.export_service import ExportService
-from src.services.transaction_service import TransactionService
+from src.services.account import AccountService
+from src.services.budget import BudgetService
+from src.services.category import CategoryService
+from src.services.export import ExportService
+from src.services.transaction import TransactionService
 
 T = TypeVar("T", bound=IntEnum)
 

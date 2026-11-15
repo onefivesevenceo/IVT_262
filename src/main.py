@@ -6,17 +6,15 @@
 import sys
 
 from src.cli.terminal_interface import TerminalInterface
-from src.repositories.in_memory import (
-    InMemoryAccountRepository,
-    InMemoryBudgetRepository,
-    InMemoryCategoryRepository,
-    InMemoryTransactionRepository,
-)
-from src.services.account_service import AccountService
-from src.services.budget_service import BudgetService
-from src.services.category_service import CategoryService
-from src.services.export_service import ExportService
-from src.services.transaction_service import TransactionService
+from src.repositories.account import InMemoryAccountRepository
+from src.repositories.budget import InMemoryBudgetRepository
+from src.repositories.category import InMemoryCategoryRepository
+from src.repositories.transaction import InMemoryTransactionRepository
+from src.services.account import AccountService
+from src.services.budget import BudgetService
+from src.services.category import CategoryService
+from src.services.export import ExportService
+from src.services.transaction import TransactionService
 
 
 def main() -> None:
