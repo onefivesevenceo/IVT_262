@@ -116,7 +116,7 @@ capital-tracker/
         ├── budget.py               <-- Валидация лимитов, периодов и индикация
         ├── category.py             <-- Фильтрация по направлению и seed категорий
         ├── export.py               <-- Сериализация журнала в поток CSV UTF-8 BOM
-        └── transaction.py          <-- Атомарные проводки, переводы и откат балансов
+        └── transaction.py          <-- Регистрация операций, переводы и откат балансов
 ```
 
 ---
@@ -142,7 +142,8 @@ capital-tracker/
    * Сервисы верхнего уровня зависят от абстракций (базовых классов репозиториев), а не от конкретных реализаций in-memory словарей. Внедрение зависимостей происходит через конструкторы (`Dependency Injection`).
 
 ### Обоснование контролируемого нарушения/компромисса
-* **Компромисс в реализации SRP внутри TransactionService:** Метод `make_transfer` в `TransactionService` напрямую мутирует балансы через `AccountRepository`, минуя доменные события. В микросервисной или распределенной архитектуре это должно быть разделено на распределенную сагу (Saga Pattern) или диспетчер доменных событий. В прототипе это сделано осознанно ради обеспечения строгой атомарности транзакции в локальной памяти без оверхеда на шину событий.
+* **Компромисс консольного прототипа:** `TransactionService` координирует изменения балансов и журнала через абстракции репозиториев. Перед переводом проверяются оба счета; перед отменой перевода проверяется существование обоих счетов. Однако обновления выполняются последовательно, без общего механизма отката при ошибке записи, поэтому строгая атомарность не гарантируется. Для целевой версии с SQLAlchemy изменения балансов и журнала должны выполняться в одной транзакции БД. Доменные события или распределенная сага для этого монолитного прототипа не требуются.
+* **Хранение данных:** InMemory-репозитории сохраняют состояние только до завершения процесса. Сообщение CLI «Данные сохранены» при выходе не означает запись на диск; постоянное хранение относится к целевой веб-версии.
 
 ---
 
@@ -587,15 +588,9 @@ class CategoryService:
         """Инициализирует базовые категории для пользователя."""
         existing = self._repo.get_all_by_user(user_id)
         if not existing:
-            self._repo.add(
-                Category(0, user_id, "Продукты", CategoryDirection.EXPENSE)
-            )
-            self._repo.add(
-                Category(0, user_id, "Кафе", CategoryDirection.EXPENSE)
-            )
-            self._repo.add(
-                Category(0, user_id, "Зарплата", CategoryDirection.INCOME)
-            )
+            self._repo.add(Category(0, user_id, "Продукты", CategoryDirection.EXPENSE))
+            self._repo.add(Category(0, user_id, "Кафе", CategoryDirection.EXPENSE))
+            self._repo.add(Category(0, user_id, "Зарплата", CategoryDirection.INCOME))
 
     def get_user_categories(self, user_id: int) -> list[Category]:
         """Возвращает все доступные категории пользователя."""
@@ -669,16 +664,10 @@ class BudgetService:
         if self._category_repo is not None:
             category = self._category_repo.get_by_id(category_id)
             if not category or category.user_id != user_id:
-                msg = (
-                    "Категория не найдена "
-                    "или принадлежит другому пользователю."
-                )
+                msg = "Категория не найдена или принадлежит другому пользователю."
                 raise PermissionError(msg)
             if category.direction != CategoryDirection.EXPENSE:
-                msg = (
-                    "Бюджетный лимит можно установить "
-                    "только для категории расходов."
-                )
+                msg = "Бюджетный лимит можно установить только для категории расходов."
                 raise ValueError(msg)
 
         budget = BudgetLimit(
@@ -771,19 +760,13 @@ class TransactionService:
 
         account = self._account_repo.get_by_id(account_id)
         if not account or account.user_id != user_id:
-            msg = (
-                "Указанный счет не существует "
-                "или принадлежит другому пользователю."
-            )
+            msg = "Указанный счет не существует или принадлежит другому пользователю."
             raise PermissionError(msg)
 
         if category_id is not None and self._category_repo is not None:
             category = self._category_repo.get_by_id(category_id)
             if not category or category.user_id != user_id:
-                msg = (
-                    "Категория не найдена "
-                    "или принадлежит другому пользователю."
-                )
+                msg = "Категория не найдена или принадлежит другому пользователю."
                 raise PermissionError(msg)
 
             if (
@@ -876,24 +859,16 @@ class TransactionService:
             raise ValueError(msg)
 
         if tx.transaction_type == TransactionType.EXPENSE:
-            self._account_repo.update_balance(
-                account.id, account.balance + tx.amount
-            )
+            self._account_repo.update_balance(account.id, account.balance + tx.amount)
         elif tx.transaction_type == TransactionType.INCOME:
-            self._account_repo.update_balance(
-                account.id, account.balance - tx.amount
-            )
+            self._account_repo.update_balance(account.id, account.balance - tx.amount)
         elif tx.transaction_type == TransactionType.TRANSFER and tx.to_account_id:
             target = self._account_repo.get_by_id(tx.to_account_id)
             if not target:
                 msg = "Целевой счет перевода не найден для отката операции."
                 raise ValueError(msg)
-            self._account_repo.update_balance(
-                account.id, account.balance + tx.amount
-            )
-            self._account_repo.update_balance(
-                target.id, target.balance - tx.amount
-            )
+            self._account_repo.update_balance(account.id, account.balance + tx.amount)
+            self._account_repo.update_balance(target.id, target.balance - tx.amount)
 
         self._tx_repo.delete(transaction_id)
 
@@ -1061,9 +1036,7 @@ class TerminalInterface:
         self._cat_svc.seed_defaults(self._user_id)
         while True:
             self._print_header()
-            choice = self._read_choice(
-                "Выберите пункт меню [0-9]: ", MainMenuChoice
-            )
+            choice = self._read_choice("Выберите пункт меню [0-9]: ", MainMenuChoice)
 
             if choice is MainMenuChoice.SHOW_ACCOUNTS:
                 self._handle_show_accounts()
@@ -1145,9 +1118,7 @@ class TerminalInterface:
             if not balance.is_finite():
                 print("[!] Ошибка: баланс должен быть конечным числом.")
                 return
-            acc = self._acc_svc.create_account(
-                self._user_id, name, acc_type, balance
-            )
+            acc = self._acc_svc.create_account(self._user_id, name, acc_type, balance)
             print(
                 f"[OK] Счет '{acc.name}' успешно открыт "
                 f"с балансом {acc.balance:.2f} руб."
@@ -1179,9 +1150,7 @@ class TerminalInterface:
         acc_id = int(raw_acc_id)
 
         print("Тип операции: 1. Расход, 2. Доход")
-        choice = self._read_choice(
-            "Выберите тип [1-2]: ", TransactionKindChoice
-        )
+        choice = self._read_choice("Выберите тип [1-2]: ", TransactionKindChoice)
         tx_type = choice.to_domain
 
         categories = self._cat_svc.get_categories_by_direction(
@@ -1202,9 +1171,7 @@ class TerminalInterface:
             self._tx_svc.register_transaction(
                 self._user_id, tx_type, amount, acc_id, cat_id
             )
-            print(
-                "[OK] Операция успешно зафиксирована, баланс счета пересчитан."
-            )
+            print("[OK] Операция успешно зафиксирована, баланс счета пересчитан.")
         except (InvalidOperation, ValueError, PermissionError) as err:
             print(f"[!] Ошибка: {err}")
 
@@ -1272,9 +1239,7 @@ class TerminalInterface:
             raw_lim = input("Лимит (руб): ").strip()
             try:
                 lim = Decimal(raw_lim)
-                self._bdg_svc.set_budget(
-                    self._user_id, cat_id, month, year, lim
-                )
+                self._bdg_svc.set_budget(self._user_id, cat_id, month, year, lim)
                 print("[OK] Лимит успешно установлен.")
             except (InvalidOperation, ValueError, PermissionError) as err:
                 print(f"[!] Ошибка: {err}")
@@ -1283,9 +1248,7 @@ class TerminalInterface:
                 spent, ratio, ind = self._bdg_svc.calculate_status(
                     self._user_id, cat_id, month, year
                 )
-                print(
-                    f"Потрачено: {spent:.2f} руб. ({ratio:.1f}%) | Статус: {ind}"
-                )
+                print(f"Потрачено: {spent:.2f} руб. ({ratio:.1f}%) | Статус: {ind}")
             except ValueError as err:
                 print(f"[!] Ошибка: {err}")
 
@@ -1299,9 +1262,7 @@ class TerminalInterface:
         tx_id = int(raw_tx_id)
         try:
             self._tx_svc.delete_transaction(tx_id, self._user_id)
-            print(
-                "[OK] Транзакция удалена, остаток счета автоматически восстановлен."
-            )
+            print("[OK] Транзакция удалена, остаток счета автоматически восстановлен.")
         except (ValueError, PermissionError) as err:
             print(f"[!] Ошибка: {err}")
 
@@ -1398,10 +1359,10 @@ $ uv run ruff check src/
 All checks passed!
 
 $ uv run ruff format --check src/
-19 files already formatted
+21 files already formatted
 
 $ uv run mypy src/
-Success: no issues found in 15 source files
+Success: no issues found in 21 source files
 ```
 
 ---
