@@ -6,6 +6,7 @@ from src.models.transaction import TransactionType
 from src.repositories.budget import BudgetRepository
 from src.repositories.category import CategoryRepository
 from src.repositories.transaction import TransactionRepository
+from src.services.money import validate_money
 
 
 class BudgetService:
@@ -15,8 +16,9 @@ class BudgetService:
         self,
         budget_repo: BudgetRepository,
         tx_repo: TransactionRepository,
-        category_repo: CategoryRepository | None = None,
+        category_repo: CategoryRepository,
     ) -> None:
+        """Получает хранилища лимитов, операций и обязательных категорий."""
         self._budget_repo = budget_repo
         self._tx_repo = tx_repo
         self._category_repo = category_repo
@@ -42,18 +44,15 @@ class BudgetService:
         """Устанавливает лимит бюджета на календарный месяц."""
         self._validate_period(month, year)
 
-        if not limit_amount.is_finite() or limit_amount <= Decimal("0.00"):
-            msg = "Лимит бюджета обязан быть конечным положительным числом."
-            raise ValueError(msg)
+        validate_money(limit_amount, positive=True)
 
-        if self._category_repo is not None:
-            category = self._category_repo.get_by_id(category_id)
-            if not category or category.user_id != user_id:
-                msg = "Категория не найдена или принадлежит другому пользователю."
-                raise PermissionError(msg)
-            if category.direction != CategoryDirection.EXPENSE:
-                msg = "Бюджетный лимит можно установить только для категории расходов."
-                raise ValueError(msg)
+        category = self._category_repo.get_by_id(category_id)
+        if not category or category.user_id != user_id:
+            msg = "Категория не найдена или принадлежит другому пользователю."
+            raise PermissionError(msg)
+        if category.direction != CategoryDirection.EXPENSE:
+            msg = "Бюджетный лимит можно установить только для категории расходов."
+            raise ValueError(msg)
 
         budget = BudgetLimit(
             id=0,
@@ -70,6 +69,11 @@ class BudgetService:
     ) -> tuple[Decimal, Decimal, str]:
         """Рассчитывает сумму расходов, процент освоения и цветовой статус."""
         self._validate_period(month, year)
+
+        category = self._category_repo.get_by_id(category_id)
+        if not category or category.user_id != user_id:
+            msg = "Категория не найдена или принадлежит другому пользователю."
+            raise PermissionError(msg)
 
         budget = self._budget_repo.get_limit(user_id, category_id, month, year)
         if not budget:

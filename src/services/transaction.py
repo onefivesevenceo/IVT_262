@@ -6,6 +6,7 @@ from src.models.transaction import Transaction, TransactionType
 from src.repositories.account import AccountRepository
 from src.repositories.category import CategoryRepository
 from src.repositories.transaction import TransactionRepository
+from src.services.money import validate_money
 
 
 class TransactionService:
@@ -15,8 +16,9 @@ class TransactionService:
         self,
         tx_repo: TransactionRepository,
         account_repo: AccountRepository,
-        category_repo: CategoryRepository | None = None,
+        category_repo: CategoryRepository,
     ) -> None:
+        """Получает репозитории одной прикладной транзакции."""
         self._tx_repo = tx_repo
         self._account_repo = account_repo
         self._category_repo = category_repo
@@ -30,34 +32,39 @@ class TransactionService:
         category_id: int | None = None,
     ) -> Transaction:
         """Регистрирует приход/расход и пересчитывает баланс счета."""
-        if not amount.is_finite() or amount <= Decimal("0.00"):
-            msg = "Сумма операции обязана быть конечной и строго положительной."
-            raise ValueError(msg)
+        validate_money(amount, positive=True)
 
         account = self._account_repo.get_by_id(account_id)
         if not account or account.user_id != user_id:
             msg = "Указанный счет не существует или принадлежит другому пользователю."
             raise PermissionError(msg)
 
-        if category_id is not None and self._category_repo is not None:
-            category = self._category_repo.get_by_id(category_id)
-            if not category or category.user_id != user_id:
-                msg = "Категория не найдена или принадлежит другому пользователю."
-                raise PermissionError(msg)
+        if account.is_archived:
+            msg = "Нельзя проводить новые операции по архивному счету."
+            raise ValueError(msg)
 
-            if (
-                tx_type == TransactionType.EXPENSE
-                and category.direction != CategoryDirection.EXPENSE
-            ):
-                msg = "Для операции расхода выбрана категория доходов."
-                raise ValueError(msg)
+        if category_id is None:
+            msg = "Для дохода или расхода необходимо указать категорию."
+            raise ValueError(msg)
 
-            if (
-                tx_type == TransactionType.INCOME
-                and category.direction != CategoryDirection.INCOME
-            ):
-                msg = "Для операции дохода выбрана категория расходов."
-                raise ValueError(msg)
+        category = self._category_repo.get_by_id(category_id)
+        if not category or category.user_id != user_id:
+            msg = "Категория не найдена или принадлежит другому пользователю."
+            raise PermissionError(msg)
+
+        if (
+            tx_type == TransactionType.EXPENSE
+            and category.direction != CategoryDirection.EXPENSE
+        ):
+            msg = "Для операции расхода выбрана категория доходов."
+            raise ValueError(msg)
+
+        if (
+            tx_type == TransactionType.INCOME
+            and category.direction != CategoryDirection.INCOME
+        ):
+            msg = "Для операции дохода выбрана категория расходов."
+            raise ValueError(msg)
 
         if tx_type == TransactionType.EXPENSE:
             new_balance = account.balance - amount
@@ -88,9 +95,7 @@ class TransactionService:
         amount: Decimal,
     ) -> Transaction:
         """Выполняет межбалансовый перевод без изменения совокупного капитала."""
-        if not amount.is_finite() or amount <= Decimal("0.00"):
-            msg = "Сумма перевода обязана быть конечной и строго положительной."
-            raise ValueError(msg)
+        validate_money(amount, positive=True)
 
         if from_account_id == to_account_id:
             msg = "Счета списания и зачисления должны различаться."
@@ -106,6 +111,10 @@ class TransactionService:
         if not target or target.user_id != user_id:
             msg = "Целевой счет не найден."
             raise PermissionError(msg)
+
+        if source.is_archived or target.is_archived:
+            msg = "Нельзя выполнять новый перевод с участием архивного счета."
+            raise ValueError(msg)
 
         self._account_repo.update_balance(source.id, source.balance - amount)
         self._account_repo.update_balance(target.id, target.balance + amount)
@@ -133,6 +142,9 @@ class TransactionService:
         if not account:
             msg = "Связанный счет не найден."
             raise ValueError(msg)
+        if account.user_id != user_id:
+            msg = "Доступ к связанному счету запрещен."
+            raise PermissionError(msg)
 
         if tx.transaction_type == TransactionType.EXPENSE:
             self._account_repo.update_balance(account.id, account.balance + tx.amount)
@@ -143,6 +155,9 @@ class TransactionService:
             if not target:
                 msg = "Целевой счет перевода не найден для отката операции."
                 raise ValueError(msg)
+            if target.user_id != user_id:
+                msg = "Доступ к целевому счету запрещен."
+                raise PermissionError(msg)
             self._account_repo.update_balance(account.id, account.balance + tx.amount)
             self._account_repo.update_balance(target.id, target.balance - tx.amount)
 

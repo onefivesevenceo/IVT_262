@@ -1,4 +1,4 @@
-from decimal import Decimal, InvalidOperation
+from decimal import Decimal
 from enum import IntEnum
 from typing import TypeVar
 
@@ -39,6 +39,7 @@ class AccountTypeChoice(IntEnum):
 
     @property
     def to_domain(self) -> AccountType:
+        """Преобразует пункт меню в доменный тип счета."""
         mapping = {
             AccountTypeChoice.DEBIT: AccountType.DEBIT,
             AccountTypeChoice.CREDIT: AccountType.CREDIT,
@@ -56,12 +57,14 @@ class TransactionKindChoice(IntEnum):
 
     @property
     def to_domain(self) -> TransactionType:
+        """Преобразует пункт меню в тип финансовой операции."""
         if self is TransactionKindChoice.EXPENSE:
             return TransactionType.EXPENSE
         return TransactionType.INCOME
 
     @property
     def category_direction(self) -> CategoryDirection:
+        """Выбирает направление категории для дохода или расхода."""
         if self is TransactionKindChoice.EXPENSE:
             return CategoryDirection.EXPENSE
         return CategoryDirection.INCOME
@@ -86,6 +89,7 @@ class TerminalInterface:
         category_service: CategoryService,
         export_service: ExportService,
     ) -> None:
+        """Получает сервисы текущей операции, не обращаясь к репозиториям."""
         self._user_id = user_id
         self._acc_svc = account_service
         self._tx_svc = tx_service
@@ -93,34 +97,26 @@ class TerminalInterface:
         self._cat_svc = category_service
         self._exp_svc = export_service
 
-    def run(self) -> None:
-        """Главный цикл обработки команд терминала."""
-        self._cat_svc.seed_defaults(self._user_id)
-        while True:
-            self._print_header()
-            choice = self._read_choice("Выберите пункт меню [0-9]: ", MainMenuChoice)
-
-            if choice is MainMenuChoice.SHOW_ACCOUNTS:
-                self._handle_show_accounts()
-            elif choice is MainMenuChoice.CREATE_ACCOUNT:
-                self._handle_create_account()
-            elif choice is MainMenuChoice.ADD_TRANSACTION:
-                self._handle_add_transaction()
-            elif choice is MainMenuChoice.TRANSFER:
-                self._handle_transfer()
-            elif choice is MainMenuChoice.SHOW_HISTORY:
-                self._handle_show_history()
-            elif choice is MainMenuChoice.BUDGET_STATUS:
-                self._handle_budget_status()
-            elif choice is MainMenuChoice.DELETE_TRANSACTION:
-                self._handle_delete_transaction()
-            elif choice is MainMenuChoice.EXPORT_CSV:
-                self._handle_export_csv()
-            elif choice is MainMenuChoice.ARCHIVE_ACCOUNT:
-                self._handle_archive_account()
-            elif choice is MainMenuChoice.EXIT:
-                print("\nЗавершение сеанса. Данные сохранены.")
-                break
+    def run_once(self) -> bool:
+        """Обрабатывает один пункт меню внутри внешней транзакции БД."""
+        self._print_header()
+        choice = self._read_choice("Выберите пункт меню [0-9]: ", MainMenuChoice)
+        if choice is MainMenuChoice.EXIT:
+            print("\nЗавершение сеанса. Данные сохранены в базе данных.")
+            return False
+        handlers = {
+            MainMenuChoice.SHOW_ACCOUNTS: self._handle_show_accounts,
+            MainMenuChoice.CREATE_ACCOUNT: self._handle_create_account,
+            MainMenuChoice.ADD_TRANSACTION: self._handle_add_transaction,
+            MainMenuChoice.TRANSFER: self._handle_transfer,
+            MainMenuChoice.SHOW_HISTORY: self._handle_show_history,
+            MainMenuChoice.BUDGET_STATUS: self._handle_budget_status,
+            MainMenuChoice.DELETE_TRANSACTION: self._handle_delete_transaction,
+            MainMenuChoice.EXPORT_CSV: self._handle_export_csv,
+            MainMenuChoice.ARCHIVE_ACCOUNT: self._handle_archive_account,
+        }
+        handlers[choice]()
+        return True
 
     def _print_header(self) -> None:
         """Отображает верхнюю информационную плашку."""
@@ -166,27 +162,16 @@ class TerminalInterface:
     def _handle_create_account(self) -> None:
         """Диалог создания счета."""
         name = input("Введите наименование счета: ").strip()
-        if not name:
-            print("[!] Наименование не может быть пустым.")
-            return
-
         print("Доступные типы: 1. DEBIT, 2. CREDIT, 3. CASH, 4. SAVINGS")
         choice = self._read_choice("Выберите тип [1-4]: ", AccountTypeChoice)
         acc_type = choice.to_domain
 
         raw_balance = input("Введите начальный остаток: ").strip()
-        try:
-            balance = Decimal(raw_balance)
-            if not balance.is_finite():
-                print("[!] Ошибка: баланс должен быть конечным числом.")
-                return
-            acc = self._acc_svc.create_account(self._user_id, name, acc_type, balance)
-            print(
-                f"[OK] Счет '{acc.name}' успешно открыт "
-                f"с балансом {acc.balance:.2f} руб."
-            )
-        except InvalidOperation:
-            print("[!] Ошибка: Некорректный формат денежной суммы.")
+        balance = Decimal(raw_balance)
+        acc = self._acc_svc.create_account(self._user_id, name, acc_type, balance)
+        print(
+            f"[OK] Счет '{acc.name}' успешно открыт с балансом {acc.balance:.2f} руб."
+        )
 
     def _handle_archive_account(self) -> None:
         """Диалог архивации счета."""
@@ -196,11 +181,8 @@ class TerminalInterface:
             print("[!] Некорректный ID счета.")
             return
         acc_id = int(raw_id)
-        try:
-            self._acc_svc.archive_account(acc_id, self._user_id)
-            print(f"[OK] Счет ID {acc_id} успешно переведен в архив.")
-        except ValueError as err:
-            print(f"[!] Ошибка: {err}")
+        self._acc_svc.archive_account(acc_id, self._user_id)
+        print(f"[OK] Счет ID {acc_id} успешно переведен в архив.")
 
     def _handle_add_transaction(self) -> None:
         """Диалог регистрации дохода или расхода."""
@@ -228,14 +210,11 @@ class TerminalInterface:
         cat_id = int(raw_cat_id)
 
         raw_amount = input("Введите сумму: ").strip()
-        try:
-            amount = Decimal(raw_amount)
-            self._tx_svc.register_transaction(
-                self._user_id, tx_type, amount, acc_id, cat_id
-            )
-            print("[OK] Операция успешно зафиксирована, баланс счета пересчитан.")
-        except (InvalidOperation, ValueError, PermissionError) as err:
-            print(f"[!] Ошибка: {err}")
+        amount = Decimal(raw_amount)
+        self._tx_svc.register_transaction(
+            self._user_id, tx_type, amount, acc_id, cat_id
+        )
+        print("[OK] Операция успешно зафиксирована, баланс счета пересчитан.")
 
     def _handle_transfer(self) -> None:
         """Диалог внутреннего перевода."""
@@ -247,14 +226,9 @@ class TerminalInterface:
             return
 
         raw_amount = input("Сумма перевода: ").strip()
-        try:
-            amount = Decimal(raw_amount)
-            self._tx_svc.make_transfer(
-                self._user_id, int(raw_from), int(raw_to), amount
-            )
-            print("[OK] Перевод успешно выполнен. Совокупный капитал неизменен.")
-        except (InvalidOperation, ValueError, PermissionError) as err:
-            print(f"[!] Ошибка: {err}")
+        amount = Decimal(raw_amount)
+        self._tx_svc.make_transfer(self._user_id, int(raw_from), int(raw_to), amount)
+        print("[OK] Перевод успешно выполнен. Совокупный капитал неизменен.")
 
     def _handle_show_history(self) -> None:
         """Отображает журнал операций."""
@@ -299,20 +273,14 @@ class TerminalInterface:
 
         if action is BudgetActionChoice.SET_LIMIT:
             raw_lim = input("Лимит (руб): ").strip()
-            try:
-                lim = Decimal(raw_lim)
-                self._bdg_svc.set_budget(self._user_id, cat_id, month, year, lim)
-                print("[OK] Лимит успешно установлен.")
-            except (InvalidOperation, ValueError, PermissionError) as err:
-                print(f"[!] Ошибка: {err}")
+            lim = Decimal(raw_lim)
+            self._bdg_svc.set_budget(self._user_id, cat_id, month, year, lim)
+            print("[OK] Лимит успешно установлен.")
         else:
-            try:
-                spent, ratio, ind = self._bdg_svc.calculate_status(
-                    self._user_id, cat_id, month, year
-                )
-                print(f"Потрачено: {spent:.2f} руб. ({ratio:.1f}%) | Статус: {ind}")
-            except ValueError as err:
-                print(f"[!] Ошибка: {err}")
+            spent, ratio, ind = self._bdg_svc.calculate_status(
+                self._user_id, cat_id, month, year
+            )
+            print(f"Потрачено: {spent:.2f} руб. ({ratio:.1f}%) | Статус: {ind}")
 
     def _handle_delete_transaction(self) -> None:
         """Удаляет транзакцию с откатом сальдо."""
@@ -322,11 +290,8 @@ class TerminalInterface:
             print("[!] Некорректный ID транзакции.")
             return
         tx_id = int(raw_tx_id)
-        try:
-            self._tx_svc.delete_transaction(tx_id, self._user_id)
-            print("[OK] Транзакция удалена, остаток счета автоматически восстановлен.")
-        except (ValueError, PermissionError) as err:
-            print(f"[!] Ошибка: {err}")
+        self._tx_svc.delete_transaction(tx_id, self._user_id)
+        print("[OK] Транзакция удалена, остаток счета автоматически восстановлен.")
 
     def _handle_export_csv(self) -> None:
         """Экспортирует данные в файл CSV."""

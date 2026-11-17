@@ -32,6 +32,7 @@ class InMemoryAccountRepository(AccountRepository):
     """Хранилище счетов в оперативной памяти."""
 
     def __init__(self) -> None:
+        """Создает пустое хранилище и последовательность идентификаторов."""
         self._storage: dict[int, Account] = {}
         self._seq: int = 1
 

@@ -6,6 +6,7 @@ class CategoryService:
     """Сервис управления категориями доходов и расходов."""
 
     def __init__(self, category_repo: CategoryRepository) -> None:
+        """Получает абстрактное хранилище категорий."""
         self._repo = category_repo
 
     def seed_defaults(self, user_id: int) -> None:
@@ -30,6 +31,10 @@ class CategoryService:
             if cat.direction == direction
         ]
 
-    def get_by_id(self, category_id: int) -> Category | None:
-        """Возвращает категорию по её идентификатору."""
-        return self._repo.get_by_id(category_id)
+    def get_by_id(self, category_id: int, user_id: int) -> Category | None:
+        """Возвращает категорию владельца, запрещая доступ к чужим данным."""
+        category = self._repo.get_by_id(category_id)
+        if category is not None and category.user_id != user_id:
+            msg = "Доступ к категории запрещен."
+            raise PermissionError(msg)
+        return category

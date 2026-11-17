@@ -27,6 +27,7 @@ class InMemoryTransactionRepository(TransactionRepository):
     """Хранилище транзакций в оперативной памяти."""
 
     def __init__(self) -> None:
+        """Создает пустое хранилище и последовательность идентификаторов."""
         self._storage: dict[int, Transaction] = {}
         self._seq: int = 1
 

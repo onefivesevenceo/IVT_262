@@ -10,6 +10,12 @@ from src.repositories.category import (
     CategoryRepository,
     InMemoryCategoryRepository,
 )
+from src.repositories.sqlalchemy import (
+    SQLAlchemyAccountRepository,
+    SQLAlchemyBudgetRepository,
+    SQLAlchemyCategoryRepository,
+    SQLAlchemyTransactionRepository,
+)
 from src.repositories.transaction import (
     InMemoryTransactionRepository,
     TransactionRepository,
@@ -23,5 +29,9 @@ __all__ = [
     "InMemoryBudgetRepository",
     "InMemoryCategoryRepository",
     "InMemoryTransactionRepository",
+    "SQLAlchemyAccountRepository",
+    "SQLAlchemyBudgetRepository",
+    "SQLAlchemyCategoryRepository",
+    "SQLAlchemyTransactionRepository",
     "TransactionRepository",
 ]

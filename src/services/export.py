@@ -14,6 +14,7 @@ class ExportService:
         account_repo: AccountRepository,
         category_repo: CategoryRepository,
     ) -> None:
+        """Получает хранилища для подстановки имен счетов и категорий."""
         self._account_repo = account_repo
         self._category_repo = category_repo
 

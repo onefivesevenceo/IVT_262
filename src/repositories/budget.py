@@ -21,6 +21,7 @@ class InMemoryBudgetRepository(BudgetRepository):
     """Хранилище месячных лимитов бюджетов в оперативной памяти."""
 
     def __init__(self) -> None:
+        """Создает пустое хранилище и последовательность идентификаторов."""
         self._storage: dict[str, BudgetLimit] = {}
         self._seq: int = 1
 

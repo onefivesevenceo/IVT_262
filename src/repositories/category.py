@@ -23,6 +23,7 @@ class InMemoryCategoryRepository(CategoryRepository):
     """Хранилище категорий классификации операций в оперативной памяти."""
 
     def __init__(self) -> None:
+        """Создает пустое хранилище и последовательность идентификаторов."""
         self._storage: dict[int, Category] = {}
         self._seq: int = 1
 
