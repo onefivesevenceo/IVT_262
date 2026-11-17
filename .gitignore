@@ -1,9 +1,24 @@
+# macOS и IDE
 .DS_Store
 .idea/
 
-# Python bytecode
+# Окружение и локальные настройки
+.venv/
+.env
+.env.*
+!.env.example
+
+# Python и инструменты проверки
 __pycache__/
 *.py[cod]
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.coverage
+htmlcov/
+
+# Результаты сборки и экспорта
+build/
 dist/
-transactions_export.csv
+*.egg-info/
 transactions_export.csv
