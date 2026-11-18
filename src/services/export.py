@@ -18,9 +18,7 @@ class ExportService:
         self._account_repo = account_repo
         self._category_repo = category_repo
 
-    def export_to_csv(
-        self, user_id: int, transactions: list[Transaction]
-    ) -> str:
+    def export_to_csv(self, user_id: int, transactions: list[Transaction]) -> str:
         """Формирует CSV-файл после проверки принадлежности всех данных пользователю."""
 
         for tx in transactions:

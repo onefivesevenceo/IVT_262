@@ -180,7 +180,9 @@ class TransactionService:
         if account_id is not None:
             account = self._account_repo.get_by_id(account_id)
             if not account or account.user_id != user_id:
-                raise PermissionError("Счет не найден или принадлежит другому пользователю.")
+                raise PermissionError(
+                    "Счет не найден или принадлежит другому пользователю."
+                )
 
         if category_id is not None:
             category = self._category_repo.get_by_id(category_id)
