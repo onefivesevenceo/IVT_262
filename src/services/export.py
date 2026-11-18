@@ -18,12 +18,36 @@ class ExportService:
         self._account_repo = account_repo
         self._category_repo = category_repo
 
-    def export_to_csv(self, transactions: list[Transaction]) -> str:
-        """Формирует строковый поток CSV в кодировке UTF-8 с BOM."""
+    def export_to_csv(
+        self, user_id: int, transactions: list[Transaction]
+    ) -> str:
+        """Формирует CSV-файл после проверки принадлежности всех данных пользователю."""
+
+        for tx in transactions:
+            if tx.user_id != user_id:
+                raise PermissionError("Операция принадлежит другому пользователю.")
+
+            acc = self._account_repo.get_by_id(tx.account_id)
+            if not acc or acc.user_id != user_id:
+                raise PermissionError("Счет операции принадлежит другому пользователю.")
+
+            if tx.category_id is not None:
+                cat = self._category_repo.get_by_id(tx.category_id)
+                if not cat or cat.user_id != user_id:
+                    raise PermissionError(
+                        "Категория операции принадлежит другому пользователю."
+                    )
+
+            if tx.to_account_id is not None:
+                target = self._account_repo.get_by_id(tx.to_account_id)
+                if not target or target.user_id != user_id:
+                    raise PermissionError(
+                        "Целевой счет перевода принадлежит другому пользователю."
+                    )
+
         output = io.StringIO()
         output.write("\ufeff")
         writer = csv.writer(output, delimiter=";")
-
         writer.writerow(
             ["ID", "Дата и время", "Тип", "Счет", "Категория", "Сумма (руб.)"]
         )
@@ -33,7 +57,7 @@ class ExportService:
             acc_name = acc.name if acc else "Неизвестный"
 
             cat_name = "Без категории"
-            if tx.category_id:
+            if tx.category_id is not None:
                 cat = self._category_repo.get_by_id(tx.category_id)
                 if cat:
                     cat_name = cat.name

@@ -184,10 +184,175 @@ def test_many_to_many_and_export(
     assert len(row.categories) == 2
     output = ExportService(
         SQLAlchemyAccountRepository(session), SQLAlchemyCategoryRepository(session)
-    ).export_to_csv(service.get_history(owner))
+    ).export_to_csv(owner, service.get_history(owner))
     assert output.encode("utf-8").startswith(b"\xef\xbb\xbf")
     assert "ID;Дата и время;Тип;Счет;Категория;Сумма (руб.)" in output
     assert "Продукты" in output and "Без категории" in output
+
+
+def test_export_rejects_foreign_transaction(
+    session: Session, records: tuple[int, int, int, int, int]
+) -> None:
+    """Запрещает экспорт операции другого пользователя."""
+    owner, source, _, _, _ = records
+    other = UserMapper.to_orm(
+        User(0, "Другой", "other-export@capitaltracker.local", "!disabled", datetime.now())
+    )
+    session.add(other)
+    session.flush()
+
+    service = transaction_service(session)
+    foreign_tx = Transaction(
+        1, other.id, TransactionType.EXPENSE, Decimal("10"),
+        source, None, datetime.now()
+    )
+    exporter = ExportService(
+        SQLAlchemyAccountRepository(session), SQLAlchemyCategoryRepository(session)
+    )
+
+    with pytest.raises(PermissionError):
+        exporter.export_to_csv(owner, [foreign_tx])
+
+
+def test_export_rejects_mixed_owners(
+    session: Session, records: tuple[int, int, int, int, int]
+) -> None:
+    """Запрещает частичный экспорт списка с разными владельцами."""
+    owner, source, _, expense, _ = records
+    other = UserMapper.to_orm(
+        User(0, "Другой", "other-mixed@capitaltracker.local", "!disabled", datetime.now())
+    )
+    session.add(other)
+    session.flush()
+
+    service = transaction_service(session)
+    own_tx = service.register_transaction(
+        owner, TransactionType.EXPENSE, Decimal("10"), source, expense
+    )
+    foreign_tx = Transaction(
+        2, other.id, TransactionType.EXPENSE, Decimal("5"),
+        source, expense, datetime.now()
+    )
+    exporter = ExportService(
+        SQLAlchemyAccountRepository(session), SQLAlchemyCategoryRepository(session)
+    )
+
+    with pytest.raises(PermissionError):
+        exporter.export_to_csv(owner, [own_tx, foreign_tx])
+
+
+def test_export_rejects_foreign_account_in_transaction(
+    session: Session, records: tuple[int, int, int, int, int]
+) -> None:
+    """Проверяет владельца основного счета в доменном объекте."""
+    owner, _, _, _, _ = records
+    other = UserMapper.to_orm(
+        User(0, "Другой", "other-account@capitaltracker.local", "!disabled", datetime.now())
+    )
+    session.add(other)
+    session.flush()
+    foreign_account = AccountService(
+        SQLAlchemyAccountRepository(session)
+    ).create_account(other.id, "Чужой", AccountType.CASH, Decimal("0"))
+
+    tx = Transaction(
+        1, owner, TransactionType.EXPENSE, Decimal("10"),
+        foreign_account.id, None, datetime.now()
+    )
+    exporter = ExportService(
+        SQLAlchemyAccountRepository(session), SQLAlchemyCategoryRepository(session)
+    )
+
+    with pytest.raises(PermissionError):
+        exporter.export_to_csv(owner, [tx])
+
+
+def test_export_rejects_foreign_category(
+    session: Session, records: tuple[int, int, int, int, int]
+) -> None:
+    """Проверяет владельца категории в доменном объекте."""
+    owner, source, _, _, _ = records
+    other = UserMapper.to_orm(
+        User(0, "Другой", "other-category@capitaltracker.local", "!disabled", datetime.now())
+    )
+    session.add(other)
+    session.flush()
+    foreign_category = CategoryORM(
+        user_id=other.id, name="Чужая", direction="EXPENSE"
+    )
+    session.add(foreign_category)
+    session.flush()
+
+    tx = Transaction(
+        1, owner, TransactionType.EXPENSE, Decimal("10"),
+        source, foreign_category.id, datetime.now()
+    )
+    exporter = ExportService(
+        SQLAlchemyAccountRepository(session), SQLAlchemyCategoryRepository(session)
+    )
+
+    with pytest.raises(PermissionError):
+        exporter.export_to_csv(owner, [tx])
+
+
+def test_export_rejects_foreign_transfer_target(
+    session: Session, records: tuple[int, int, int, int, int]
+) -> None:
+    """Проверяет владельца целевого счета перевода."""
+    owner, source, _, _, _ = records
+    other = UserMapper.to_orm(
+        User(0, "Другой", "other-target@capitaltracker.local", "!disabled", datetime.now())
+    )
+    session.add(other)
+    session.flush()
+    foreign_account = AccountService(
+        SQLAlchemyAccountRepository(session)
+    ).create_account(other.id, "Чужой", AccountType.CASH, Decimal("0"))
+
+    tx = Transaction(
+        1, owner, TransactionType.TRANSFER, Decimal("10"),
+        source, None, datetime.now(), foreign_account.id
+    )
+    exporter = ExportService(
+        SQLAlchemyAccountRepository(session), SQLAlchemyCategoryRepository(session)
+    )
+
+    with pytest.raises(PermissionError):
+        exporter.export_to_csv(owner, [tx])
+
+
+def test_export_allows_archived_account_history(
+    session: Session, records: tuple[int, int, int, int, int]
+) -> None:
+    """Разрешает экспорт истории собственного архивного счета."""
+    owner, source, _, expense, _ = records
+    service = transaction_service(session)
+    service.register_transaction(
+        owner, TransactionType.EXPENSE, Decimal("10"), source, expense
+    )
+    AccountService(SQLAlchemyAccountRepository(session)).archive_account(source, owner)
+
+    exporter = ExportService(
+        SQLAlchemyAccountRepository(session), SQLAlchemyCategoryRepository(session)
+    )
+    output = exporter.export_to_csv(owner, service.get_history(owner))
+
+    assert "Продукты" in output
+
+
+def test_export_empty_history_has_bom_and_headers(
+    session: Session, records: tuple[int, int, int, int, int]
+) -> None:
+    """Проверяет BOM и заголовки CSV при пустом списке операций."""
+    owner, _, _, _, _ = records
+    exporter = ExportService(
+        SQLAlchemyAccountRepository(session), SQLAlchemyCategoryRepository(session)
+    )
+
+    output = exporter.export_to_csv(owner, [])
+
+    assert output.encode("utf-8").startswith(b"\xef\xbb\xbf")
+    assert "ID;Дата и время;Тип;Счет;Категория;Сумма (руб.)" in output
 
 
 @pytest.mark.parametrize("amount", ["0", "-1", "NaN", "Infinity", "-Infinity"])

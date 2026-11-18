@@ -296,7 +296,7 @@ class TerminalInterface:
     def _handle_export_csv(self) -> None:
         """Экспортирует данные в файл CSV."""
         txs = self._tx_svc.get_history(self._user_id)
-        csv_data = self._exp_svc.export_to_csv(txs)
+        csv_data = self._exp_svc.export_to_csv(self._user_id, txs)
         filename = "transactions_export.csv"
         with open(filename, "w", encoding="utf-8") as f:
             f.write(csv_data)
