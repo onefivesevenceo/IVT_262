@@ -12,6 +12,7 @@ from sqlalchemy.exc import DataError, IntegrityError
 from sqlalchemy.orm import Session, sessionmaker
 
 from src import main as application
+from src.cli.terminal_interface import TerminalInterface
 from src.database.mappers import UserMapper
 from src.database.models import (
     AccountORM,
@@ -32,6 +33,7 @@ from src.repositories.sqlalchemy import (
 )
 from src.services.account import AccountService
 from src.services.budget import BudgetService
+from src.services.category import CategoryService
 from src.services.export import ExportService
 from src.services.transaction import TransactionService
 
@@ -196,15 +198,25 @@ def test_export_rejects_foreign_transaction(
     """Запрещает экспорт операции другого пользователя."""
     owner, source, _, _, _ = records
     other = UserMapper.to_orm(
-        User(0, "Другой", "other-export@capitaltracker.local", "!disabled", datetime.now())
+        User(
+            0,
+            "Другой",
+            "other-export@capitaltracker.local",
+            "!disabled",
+            datetime.now(),
+        )
     )
     session.add(other)
     session.flush()
 
-    service = transaction_service(session)
     foreign_tx = Transaction(
-        1, other.id, TransactionType.EXPENSE, Decimal("10"),
-        source, None, datetime.now()
+        1,
+        other.id,
+        TransactionType.EXPENSE,
+        Decimal("10"),
+        source,
+        None,
+        datetime.now(),
     )
     exporter = ExportService(
         SQLAlchemyAccountRepository(session), SQLAlchemyCategoryRepository(session)
@@ -220,7 +232,9 @@ def test_export_rejects_mixed_owners(
     """Запрещает частичный экспорт списка с разными владельцами."""
     owner, source, _, expense, _ = records
     other = UserMapper.to_orm(
-        User(0, "Другой", "other-mixed@capitaltracker.local", "!disabled", datetime.now())
+        User(
+            0, "Другой", "other-mixed@capitaltracker.local", "!disabled", datetime.now()
+        )
     )
     session.add(other)
     session.flush()
@@ -230,8 +244,13 @@ def test_export_rejects_mixed_owners(
         owner, TransactionType.EXPENSE, Decimal("10"), source, expense
     )
     foreign_tx = Transaction(
-        2, other.id, TransactionType.EXPENSE, Decimal("5"),
-        source, expense, datetime.now()
+        2,
+        other.id,
+        TransactionType.EXPENSE,
+        Decimal("5"),
+        source,
+        expense,
+        datetime.now(),
     )
     exporter = ExportService(
         SQLAlchemyAccountRepository(session), SQLAlchemyCategoryRepository(session)
@@ -247,7 +266,13 @@ def test_export_rejects_foreign_account_in_transaction(
     """Проверяет владельца основного счета в доменном объекте."""
     owner, _, _, _, _ = records
     other = UserMapper.to_orm(
-        User(0, "Другой", "other-account@capitaltracker.local", "!disabled", datetime.now())
+        User(
+            0,
+            "Другой",
+            "other-account@capitaltracker.local",
+            "!disabled",
+            datetime.now(),
+        )
     )
     session.add(other)
     session.flush()
@@ -256,8 +281,13 @@ def test_export_rejects_foreign_account_in_transaction(
     ).create_account(other.id, "Чужой", AccountType.CASH, Decimal("0"))
 
     tx = Transaction(
-        1, owner, TransactionType.EXPENSE, Decimal("10"),
-        foreign_account.id, None, datetime.now()
+        1,
+        owner,
+        TransactionType.EXPENSE,
+        Decimal("10"),
+        foreign_account.id,
+        None,
+        datetime.now(),
     )
     exporter = ExportService(
         SQLAlchemyAccountRepository(session), SQLAlchemyCategoryRepository(session)
@@ -273,19 +303,28 @@ def test_export_rejects_foreign_category(
     """Проверяет владельца категории в доменном объекте."""
     owner, source, _, _, _ = records
     other = UserMapper.to_orm(
-        User(0, "Другой", "other-category@capitaltracker.local", "!disabled", datetime.now())
+        User(
+            0,
+            "Другой",
+            "other-category@capitaltracker.local",
+            "!disabled",
+            datetime.now(),
+        )
     )
     session.add(other)
     session.flush()
-    foreign_category = CategoryORM(
-        user_id=other.id, name="Чужая", direction="EXPENSE"
-    )
+    foreign_category = CategoryORM(user_id=other.id, name="Чужая", direction="EXPENSE")
     session.add(foreign_category)
     session.flush()
 
     tx = Transaction(
-        1, owner, TransactionType.EXPENSE, Decimal("10"),
-        source, foreign_category.id, datetime.now()
+        1,
+        owner,
+        TransactionType.EXPENSE,
+        Decimal("10"),
+        source,
+        foreign_category.id,
+        datetime.now(),
     )
     exporter = ExportService(
         SQLAlchemyAccountRepository(session), SQLAlchemyCategoryRepository(session)
@@ -301,7 +340,13 @@ def test_export_rejects_foreign_transfer_target(
     """Проверяет владельца целевого счета перевода."""
     owner, source, _, _, _ = records
     other = UserMapper.to_orm(
-        User(0, "Другой", "other-target@capitaltracker.local", "!disabled", datetime.now())
+        User(
+            0,
+            "Другой",
+            "other-target@capitaltracker.local",
+            "!disabled",
+            datetime.now(),
+        )
     )
     session.add(other)
     session.flush()
@@ -310,8 +355,14 @@ def test_export_rejects_foreign_transfer_target(
     ).create_account(other.id, "Чужой", AccountType.CASH, Decimal("0"))
 
     tx = Transaction(
-        1, owner, TransactionType.TRANSFER, Decimal("10"),
-        source, None, datetime.now(), foreign_account.id
+        1,
+        owner,
+        TransactionType.TRANSFER,
+        Decimal("10"),
+        source,
+        None,
+        datetime.now(),
+        foreign_account.id,
     )
     exporter = ExportService(
         SQLAlchemyAccountRepository(session), SQLAlchemyCategoryRepository(session)
@@ -903,9 +954,7 @@ def test_history_rejects_foreign_account_and_category(
         SQLAlchemyAccountRepository(session)
     ).create_account(other.id, "Чужой", AccountType.CASH, Decimal("0"))
 
-    foreign_category = CategoryORM(
-        user_id=other.id, name="Чужая", direction="EXPENSE"
-    )
+    foreign_category = CategoryORM(user_id=other.id, name="Чужая", direction="EXPENSE")
     session.add(foreign_category)
     session.flush()
 
@@ -929,9 +978,7 @@ def test_history_is_available_for_own_archived_account(
         owner, TransactionType.EXPENSE, Decimal("1"), target, expense
     )
 
-    AccountService(SQLAlchemyAccountRepository(session)).archive_account(
-        target, owner
-    )
+    AccountService(SQLAlchemyAccountRepository(session)).archive_account(target, owner)
 
     result = service.get_history(owner, account_id=target)
 
@@ -992,3 +1039,74 @@ def test_reading_history_does_not_change_account_balances(
     assert target_after is not None
     assert source_after.balance == source_balance
     assert target_after.balance == target_balance
+
+
+def test_cli_uses_same_filters_for_history_and_csv(
+    session: Session,
+    records: tuple[int, int, int, int, int],
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    """Журнал и CSV используют одинаковые фильтры без изменения балансов."""
+    owner, source, _, expense_category, income_category = records
+
+    account_repo = SQLAlchemyAccountRepository(session)
+    category_repo = SQLAlchemyCategoryRepository(session)
+    tx_repo = SQLAlchemyTransactionRepository(session)
+
+    tx_service = transaction_service(session)
+    expense_tx = tx_service.register_transaction(
+        owner,
+        TransactionType.EXPENSE,
+        Decimal("12.34"),
+        source,
+        expense_category,
+    )
+    income_tx = tx_service.register_transaction(
+        owner,
+        TransactionType.INCOME,
+        Decimal("56.78"),
+        source,
+        income_category,
+    )
+
+    interface = TerminalInterface(
+        owner,
+        AccountService(account_repo),
+        tx_service,
+        BudgetService(SQLAlchemyBudgetRepository(session), tx_repo, category_repo),
+        CategoryService(category_repo),
+        ExportService(account_repo, category_repo),
+    )
+
+    session.flush()
+    account_before = session.get(AccountORM, source)
+    assert account_before is not None
+    balance_before = account_before.balance
+
+    # Пустые даты, счет и категория; тип операции — расход.
+    answers = iter(["", "", "", "", "2"])
+    monkeypatch.setattr("builtins.input", lambda _: next(answers))
+    interface._handle_show_history()
+    journal_output = capsys.readouterr().out
+
+    monkeypatch.chdir(tmp_path)
+    answers = iter(["", "", "", "", "2"])
+    monkeypatch.setattr("builtins.input", lambda _: next(answers))
+    interface._handle_export_csv()
+    export_output = capsys.readouterr().out
+
+    csv_output = (tmp_path / "transactions_export.csv").read_text(encoding="utf-8")
+
+    assert f"#{expense_tx.id}" in journal_output
+    assert f"#{income_tx.id}" not in journal_output
+    assert "12.34" in journal_output
+    assert "12.34" in csv_output
+    assert "56.78" not in csv_output
+    assert "выгружены" in export_output
+
+    account_after = session.get(AccountORM, source)
+    assert account_after is not None
+    balance_after = account_after.balance
+    assert balance_after == balance_before
