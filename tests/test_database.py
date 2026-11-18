@@ -695,3 +695,300 @@ def test_money_validation_preserves_transfer_capital(
     accounts = AccountService(SQLAlchemyAccountRepository(session))
     assert accounts.calculate_total_capital(owner) == Decimal("1500")
     assert transaction_service(session).get_history(owner) == []
+
+
+def test_history_filters_by_inclusive_dates(
+    session: Session, records: tuple[int, int, int, int, int]
+) -> None:
+    """Проверяет включительность границ периода и исключение операций вне него."""
+    owner, source, _, expense, _ = records
+    service = transaction_service(session)
+
+    transactions = [
+        service.register_transaction(
+            owner, TransactionType.EXPENSE, Decimal("1"), source, expense
+        )
+        for _ in range(4)
+    ]
+
+    timestamps = [
+        datetime(2025, 12, 31, 23, 59),
+        datetime(2026, 1, 1, 0, 0),
+        datetime(2026, 1, 3, 23, 59),
+        datetime(2026, 1, 4, 0, 0),
+    ]
+
+    for tx, timestamp in zip(transactions, timestamps, strict=True):
+        session.execute(
+            update(TransactionORM)
+            .where(TransactionORM.id == tx.id)
+            .values(timestamp=timestamp)
+        )
+
+    session.flush()
+
+    result = service.get_history(
+        owner,
+        date_from=datetime(2026, 1, 1).date(),
+        date_to=datetime(2026, 1, 3).date(),
+    )
+
+    assert [tx.id for tx in result] == [
+        transactions[1].id,
+        transactions[2].id,
+    ]
+
+
+def test_history_rejects_invalid_date_range(
+    session: Session, records: tuple[int, int, int, int, int]
+) -> None:
+    """Проверяет запрет диапазона, в котором начальная дата позже конечной."""
+    owner = records[0]
+
+    with pytest.raises(ValueError):
+        transaction_service(session).get_history(
+            owner,
+            date_from=datetime(2026, 1, 2).date(),
+            date_to=datetime(2026, 1, 1).date(),
+        )
+
+
+def test_history_filters_by_transaction_type(
+    session: Session, records: tuple[int, int, int, int, int]
+) -> None:
+    """Проверяет фильтрацию истории по типу операции."""
+    owner, source, _, expense, income = records
+    service = transaction_service(session)
+
+    expense_tx = service.register_transaction(
+        owner, TransactionType.EXPENSE, Decimal("1"), source, expense
+    )
+    income_tx = service.register_transaction(
+        owner, TransactionType.INCOME, Decimal("1"), source, income
+    )
+
+    result = service.get_history(owner, tx_type=TransactionType.EXPENSE)
+
+    assert [tx.id for tx in result] == [expense_tx.id]
+    assert income_tx.id not in [tx.id for tx in result]
+
+
+def test_history_filters_by_category(
+    session: Session, records: tuple[int, int, int, int, int]
+) -> None:
+    """Проверяет фильтрацию истории по категории."""
+    owner, source, _, expense, income = records
+    service = transaction_service(session)
+
+    expense_tx = service.register_transaction(
+        owner, TransactionType.EXPENSE, Decimal("1"), source, expense
+    )
+    income_tx = service.register_transaction(
+        owner, TransactionType.INCOME, Decimal("1"), source, income
+    )
+
+    result = service.get_history(owner, category_id=expense)
+
+    assert [tx.id for tx in result] == [expense_tx.id]
+    assert income_tx.id not in [tx.id for tx in result]
+
+
+def test_history_filters_by_account(
+    session: Session, records: tuple[int, int, int, int, int]
+) -> None:
+    """Проверяет фильтрацию истории по счету."""
+    owner, source, target, expense, income = records
+    service = transaction_service(session)
+
+    source_tx = service.register_transaction(
+        owner, TransactionType.EXPENSE, Decimal("1"), source, expense
+    )
+    target_tx = service.register_transaction(
+        owner, TransactionType.INCOME, Decimal("1"), target, income
+    )
+
+    result = service.get_history(owner, account_id=source)
+
+    assert [tx.id for tx in result] == [source_tx.id]
+    assert target_tx.id not in [tx.id for tx in result]
+
+
+def test_history_combines_multiple_filters(
+    session: Session, records: tuple[int, int, int, int, int]
+) -> None:
+    """Проверяет совместное применение нескольких фильтров истории."""
+    owner, source, target, expense, income = records
+    service = transaction_service(session)
+
+    matching_tx = service.register_transaction(
+        owner, TransactionType.EXPENSE, Decimal("1"), source, expense
+    )
+    wrong_category_tx = service.register_transaction(
+        owner, TransactionType.INCOME, Decimal("1"), source, income
+    )
+    wrong_type_tx = service.register_transaction(
+        owner, TransactionType.INCOME, Decimal("1"), source, income
+    )
+    wrong_account_tx = service.register_transaction(
+        owner, TransactionType.EXPENSE, Decimal("1"), target, expense
+    )
+
+    timestamp = datetime(2026, 1, 2, 12, 0)
+    for tx in (matching_tx, wrong_category_tx, wrong_type_tx, wrong_account_tx):
+        session.execute(
+            update(TransactionORM)
+            .where(TransactionORM.id == tx.id)
+            .values(timestamp=timestamp)
+        )
+
+    result = service.get_history(
+        owner,
+        date_from=datetime(2026, 1, 1).date(),
+        date_to=datetime(2026, 1, 3).date(),
+        account_id=source,
+        category_id=expense,
+        tx_type=TransactionType.EXPENSE,
+    )
+
+    assert [tx.id for tx in result] == [matching_tx.id]
+
+
+def test_history_without_filters_returns_all_user_transactions(
+    session: Session, records: tuple[int, int, int, int, int]
+) -> None:
+    """Проверяет получение всей истории пользователя без фильтров."""
+    owner, source, target, expense, income = records
+    service = transaction_service(session)
+
+    first_tx = service.register_transaction(
+        owner, TransactionType.EXPENSE, Decimal("1"), source, expense
+    )
+    second_tx = service.register_transaction(
+        owner, TransactionType.INCOME, Decimal("2"), target, income
+    )
+
+    result = service.get_history(owner)
+
+    assert [tx.id for tx in result] == [first_tx.id, second_tx.id]
+
+
+def test_history_returns_empty_list_when_no_transactions_match(
+    session: Session, records: tuple[int, int, int, int, int]
+) -> None:
+    """Проверяет возврат пустого списка при отсутствии совпадений."""
+    owner = records[0]
+
+    result = transaction_service(session).get_history(
+        owner,
+        date_from=datetime(2026, 1, 1).date(),
+        date_to=datetime(2026, 1, 31).date(),
+    )
+
+    assert result == []
+
+
+def test_history_rejects_foreign_account_and_category(
+    session: Session, records: tuple[int, int, int, int, int]
+) -> None:
+    """Проверяет запрет фильтрации истории по чужому счету и категории."""
+    owner = records[0]
+
+    other = UserMapper.to_orm(
+        User(0, "Другой", "other@capitaltracker.local", "!disabled", datetime.now())
+    )
+    session.add(other)
+    session.flush()
+
+    foreign_account = AccountService(
+        SQLAlchemyAccountRepository(session)
+    ).create_account(other.id, "Чужой", AccountType.CASH, Decimal("0"))
+
+    foreign_category = CategoryORM(
+        user_id=other.id, name="Чужая", direction="EXPENSE"
+    )
+    session.add(foreign_category)
+    session.flush()
+
+    service = transaction_service(session)
+
+    with pytest.raises(PermissionError):
+        service.get_history(owner, account_id=foreign_account.id)
+
+    with pytest.raises(PermissionError):
+        service.get_history(owner, category_id=foreign_category.id)
+
+
+def test_history_is_available_for_own_archived_account(
+    session: Session, records: tuple[int, int, int, int, int]
+) -> None:
+    """Проверяет доступность истории собственного архивного счета."""
+    owner, source, target, expense, _ = records
+    service = transaction_service(session)
+
+    tx = service.register_transaction(
+        owner, TransactionType.EXPENSE, Decimal("1"), target, expense
+    )
+
+    AccountService(SQLAlchemyAccountRepository(session)).archive_account(
+        target, owner
+    )
+
+    result = service.get_history(owner, account_id=target)
+
+    assert [item.id for item in result] == [tx.id]
+
+
+def test_history_finds_transfer_by_source_account(
+    session: Session, records: tuple[int, int, int, int, int]
+) -> None:
+    """Проверяет поиск перевода по исходному счету."""
+    owner, source, target, _, _ = records
+    service = transaction_service(session)
+
+    transfer = service.make_transfer(owner, source, target, Decimal("10"))
+
+    result = service.get_history(owner, account_id=source)
+
+    assert transfer.id in [tx.id for tx in result]
+
+
+def test_history_finds_transfer_by_target_account(
+    session: Session, records: tuple[int, int, int, int, int]
+) -> None:
+    """Проверяет поиск перевода по целевому счету."""
+    owner, source, target, _, _ = records
+    service = transaction_service(session)
+
+    transfer = service.make_transfer(owner, source, target, Decimal("10"))
+
+    result = service.get_history(owner, account_id=target)
+
+    assert transfer.id in [tx.id for tx in result]
+
+
+def test_reading_history_does_not_change_account_balances(
+    session: Session, records: tuple[int, int, int, int, int]
+) -> None:
+    """Проверяет, что чтение истории не изменяет остатки на счетах."""
+    owner, source, target, expense, _ = records
+    service = transaction_service(session)
+
+    source_before = SQLAlchemyAccountRepository(session).get_by_id(source)
+    target_before = SQLAlchemyAccountRepository(session).get_by_id(target)
+
+    assert source_before is not None
+    assert target_before is not None
+
+    source_balance = source_before.balance
+    target_balance = target_before.balance
+
+    service.get_history(owner, account_id=source)
+    service.get_history(owner, account_id=target)
+
+    source_after = SQLAlchemyAccountRepository(session).get_by_id(source)
+    target_after = SQLAlchemyAccountRepository(session).get_by_id(target)
+
+    assert source_after is not None
+    assert target_after is not None
+    assert source_after.balance == source_balance
+    assert target_after.balance == target_balance
