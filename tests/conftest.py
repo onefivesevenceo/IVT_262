@@ -16,10 +16,8 @@ from sqlalchemy.orm import Session
 from src.database.mappers import UserMapper
 from src.models.account import AccountType
 from src.models.user import User
-from src.repositories.sqlalchemy import (
-    SQLAlchemyAccountRepository,
-    SQLAlchemyCategoryRepository,
-)
+from src.repositories.account import SQLAlchemyAccountRepository
+from src.repositories.category import SQLAlchemyCategoryRepository
 from src.services.account import AccountService
 from src.services.category import CategoryService
 

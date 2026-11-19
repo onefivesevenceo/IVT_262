@@ -1,5 +1,10 @@
 from abc import ABC, abstractmethod
 
+from sqlalchemy import select
+from sqlalchemy.orm import Session
+
+from src.database.mappers import BudgetLimitMapper
+from src.database.models import BudgetLimitORM
 from src.models.budget import BudgetLimit
 
 
@@ -46,3 +51,44 @@ class InMemoryBudgetRepository(BudgetRepository):
         """Возвращает лимит по ключу периода."""
         key = f"{user_id}:{category_id}:{month}:{year}"
         return self._storage.get(key)
+
+
+class SQLAlchemyBudgetRepository(BudgetRepository):
+    """Хранилище месячных лимитов с заменой суммы без смены ID."""
+
+    def __init__(self, session: Session) -> None:
+        """Принимает сессию текущей операции."""
+        self._session = session
+
+    def set_limit(self, budget: BudgetLimit) -> BudgetLimit:
+        """Добавляет лимит или меняет существующий по ключу периода."""
+        row = self._find_row(
+            budget.user_id, budget.category_id, budget.month, budget.year
+        )
+        if row is None:
+            row = BudgetLimitMapper.to_orm(budget)
+            self._session.add(row)
+        else:
+            row.limit_amount = budget.limit_amount
+        self._session.flush()
+        return BudgetLimitMapper.to_domain(row)
+
+    def get_limit(
+        self, user_id: int, category_id: int, month: int, year: int
+    ) -> BudgetLimit | None:
+        """Возвращает лимит указанной категории, владельца и периода."""
+        row = self._find_row(user_id, category_id, month, year)
+        return BudgetLimitMapper.to_domain(row) if row is not None else None
+
+    def _find_row(
+        self, user_id: int, category_id: int, month: int, year: int
+    ) -> BudgetLimitORM | None:
+        """Находит ORM-запись по уникальному ключу бюджетного периода."""
+        return self._session.scalar(
+            select(BudgetLimitORM).where(
+                BudgetLimitORM.user_id == user_id,
+                BudgetLimitORM.category_id == category_id,
+                BudgetLimitORM.month == month,
+                BudgetLimitORM.year == year,
+            )
+        )

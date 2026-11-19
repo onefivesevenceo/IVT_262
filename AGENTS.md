@@ -92,8 +92,7 @@ capital-tracker/
     │   ├── account.py
     │   ├── category.py
     │   ├── transaction.py
-    │   ├── budget.py
-    │   └── sqlalchemy.py
+    │   └── budget.py
     └── services/
         ├── __init__.py
         ├── account.py
@@ -115,8 +114,10 @@ capital-tracker/
 * Контракты репозиториев — только `abc.ABC` и `@abstractmethod`.
   `typing.Protocol` запрещен требованиями преподавателя.
 * Модули `repositories/account.py`, `category.py`, `transaction.py`, `budget.py`
-  содержат прежние ABC и InMemory-реализации. SQLAlchemy-реализации находятся
-  в `repositories/sqlalchemy.py` и наследуют соответствующие ABC.
+  содержат ABC, InMemory-реализацию и затем SQLAlchemy-реализацию
+  соответствующей сущности. Все реализации наследуют свой ABC.
+  Имена параметров переопределенных методов совпадают с контрактом ABC,
+  чтобы сохранялась совместимость вызовов с именованными аргументами.
   InMemory остаются в исходниках, но не используются в штатной DI-сборке.
 * Фасады `repositories/__init__.py` и `services/__init__.py` используют
   явные экспорты `__all__`. Не возвращать устаревшие пути `*_service.py`

@@ -12,12 +12,10 @@ from src.database.mappers import UserMapper
 from src.database.models import UserORM
 from src.database.session import SessionFactory
 from src.models.user import User
-from src.repositories.sqlalchemy import (
-    SQLAlchemyAccountRepository,
-    SQLAlchemyBudgetRepository,
-    SQLAlchemyCategoryRepository,
-    SQLAlchemyTransactionRepository,
-)
+from src.repositories.account import SQLAlchemyAccountRepository
+from src.repositories.budget import SQLAlchemyBudgetRepository
+from src.repositories.category import SQLAlchemyCategoryRepository
+from src.repositories.transaction import SQLAlchemyTransactionRepository
 from src.services.account import AccountService
 from src.services.budget import BudgetService
 from src.services.category import CategoryService
