@@ -1109,7 +1109,7 @@ def test_cli_uses_same_filters_for_history_and_csv(
     assert balance_after == balance_before
 
 
-@pytest.mark.parametrize("choice", ["5", "8"])
+@pytest.mark.parametrize("choice", ["5", "7", "8"])
 @pytest.mark.parametrize("existing_file", [False, True])
 @pytest.mark.parametrize("invalid_filter", ["date", "type", "foreign_account"])
 def test_cli_invalid_filters_preserve_csv(
@@ -1122,7 +1122,7 @@ def test_cli_invalid_filters_preserve_csv(
     existing_file: bool,
     invalid_filter: str,
 ) -> None:
-    """Ошибочные фильтры отменяют журнал и экспорт без изменения файла и данных."""
+    """Ошибочные фильтры отменяют просмотр, удаление и экспорт без изменений."""
     owner, source, _, expense, _ = records
     service = transaction_service(session)
     service.register_transaction(
@@ -1190,3 +1190,58 @@ def test_in_memory_transaction_keyword_arguments() -> None:
     assert repository.get_by_id(transaction_id=saved.id) == saved
     repository.delete(transaction_id=saved.id)
     assert repository.get_by_id(transaction_id=saved.id) is None
+
+
+@pytest.mark.parametrize("write_failure", [False, True])
+def test_cli_export_handles_file_errors(
+    session: Session,
+    records: tuple[int, int, int, int, int],
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+    capsys: pytest.CaptureFixture[str],
+    write_failure: bool,
+) -> None:
+    """Ошибка открытия или записи CSV не прерывает работу меню."""
+    from unittest.mock import mock_open
+
+    owner = records[0]
+    monkeypatch.chdir(tmp_path)
+    if write_failure:
+        mocked_open = mock_open()
+        mocked_open.return_value.write.side_effect = OSError("Недостаточно места")
+        monkeypatch.setattr("builtins.open", mocked_open)
+    else:
+        (tmp_path / "transactions_export.csv").mkdir()
+    answers = iter(["8", "", "", "", "", "", "0"])
+    monkeypatch.setattr("builtins.input", lambda _: next(answers))
+    interface = application.build_interface(session, owner)
+
+    assert interface.run_once()
+    assert not interface.run_once()
+    output = capsys.readouterr().out
+    assert "Не удалось записать CSV" in output
+    assert "выгружены" not in output
+
+
+@pytest.mark.parametrize("empty", [False, True])
+def test_cli_delete_after_history(
+    session: Session,
+    records: tuple[int, int, int, int, int],
+    monkeypatch: pytest.MonkeyPatch,
+    empty: bool,
+) -> None:
+    """Удаление работает после показа истории и отменяется при пустой выборке."""
+    owner, source, _, expense, _ = records
+    service = transaction_service(session)
+    transaction = service.register_transaction(
+        owner, TransactionType.EXPENSE, Decimal("10"), source, expense
+    )
+    filters = ["", "", "", "", "1" if empty else ""]
+    answers = iter(["7", *filters, *([] if empty else [str(transaction.id)])])
+    monkeypatch.setattr("builtins.input", lambda _: next(answers))
+
+    assert application.build_interface(session, owner).run_once()
+    assert bool(service.get_history(owner)) == empty
+    account = SQLAlchemyAccountRepository(session).get_by_id(source)
+    assert account is not None
+    assert account.balance == Decimal("990" if empty else "1000")
