@@ -150,7 +150,7 @@ class TerminalInterface:
         print("5. Журнал операций")
         print("6. Бюджеты и контроль лимитов")
         print("7. Удалить операцию (Откат остатка)")
-        print("8. Экспорт журнала в CSV (Результат доработки)")
+        print("8. Экспорт отфильтрованного журнала в CSV")
         print("9. Заархивировать счет")
         print("0. Выход")
         print("-" * 55)
@@ -251,7 +251,7 @@ class TerminalInterface:
 
     def _read_history_filters(self) -> list[Transaction] | None:
         """Считывает общие фильтры и возвращает отобранные операции."""
-        print("\\nФильтры журнала (пустое поле — без фильтра).")
+        print("\nФильтры журнала (пустое поле — без фильтра).")
 
         raw_date_from = input("Дата от [ГГГГ-ММ-ДД]: ").strip()
         raw_date_to = input("Дата до [ГГГГ-ММ-ДД]: ").strip()
@@ -303,10 +303,10 @@ class TerminalInterface:
             return
 
         if not txs:
-            print("\\nЖурнал операций пуст.")
+            print("\nЖурнал операций пуст.")
             return
 
-        print("\\nЖурнал транзакций:")
+        print("\nЖурнал транзакций:")
         for tx in txs:
             print(
                 f"  #{tx.id} | {tx.timestamp.strftime('%d.%m %H:%M')} | "

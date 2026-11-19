@@ -1085,7 +1085,6 @@ def test_cli_uses_same_filters_for_history_and_csv(
     assert account_before is not None
     balance_before = account_before.balance
 
-    # Пустые даты, счет и категория; тип операции — расход.
     answers = iter(["", "", "", "", "2"])
     monkeypatch.setattr("builtins.input", lambda _: next(answers))
     interface._handle_show_history()
@@ -1110,3 +1109,72 @@ def test_cli_uses_same_filters_for_history_and_csv(
     assert account_after is not None
     balance_after = account_after.balance
     assert balance_after == balance_before
+
+
+@pytest.mark.parametrize("choice", ["5", "8"])
+@pytest.mark.parametrize("existing_file", [False, True])
+@pytest.mark.parametrize("invalid_filter", ["date", "type", "foreign_account"])
+def test_cli_invalid_filters_preserve_csv(
+    session: Session,
+    records: tuple[int, int, int, int, int],
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+    capsys: pytest.CaptureFixture[str],
+    choice: str,
+    existing_file: bool,
+    invalid_filter: str,
+) -> None:
+    """Ошибочные фильтры отменяют журнал и экспорт без изменения файла и данных."""
+    owner, source, _, expense, _ = records
+    service = transaction_service(session)
+    service.register_transaction(
+        owner, TransactionType.EXPENSE, Decimal("12.34"), source, expense
+    )
+    balance_before = AccountService(
+        SQLAlchemyAccountRepository(session)
+    ).calculate_total_capital(owner)
+    history_before = service.get_history(owner)
+    filters = ["", "", "", "", ""]
+    if invalid_filter == "date":
+        filters[0] = "2026-02-30"
+    elif invalid_filter == "type":
+        filters[4] = "4"
+    else:
+        other = UserMapper.to_orm(
+            User(
+                0, "Другой", "filter@capitaltracker.local", "!disabled", datetime.now()
+            )
+        )
+        session.add(other)
+        session.flush()
+        account = AccountService(SQLAlchemyAccountRepository(session)).create_account(
+            other.id, "Чужой", AccountType.CASH, Decimal("0")
+        )
+        filters[2] = str(account.id)
+
+    monkeypatch.chdir(tmp_path)
+    csv_path = tmp_path / "transactions_export.csv"
+    original = b"previous export\r\n"
+    if existing_file:
+        csv_path.write_bytes(original)
+    answers = iter([choice, *filters])
+    monkeypatch.setattr("builtins.input", lambda _: next(answers))
+
+    assert application.build_interface(session, owner).run_once()
+
+    output = capsys.readouterr().out
+    assert "[!]" in output
+    assert "Журнал транзакций:" not in output
+    assert "выгружены" not in output
+    assert "\\n" not in output
+    if existing_file:
+        assert csv_path.read_bytes() == original
+    else:
+        assert not csv_path.exists()
+    assert service.get_history(owner) == history_before
+    assert (
+        AccountService(SQLAlchemyAccountRepository(session)).calculate_total_capital(
+            owner
+        )
+        == balance_before
+    )
