@@ -1,4 +1,4 @@
-from datetime import datetime
+from datetime import date, datetime
 from decimal import Decimal
 
 from src.models.category import CategoryDirection
@@ -163,6 +163,46 @@ class TransactionService:
 
         self._tx_repo.delete(transaction_id)
 
-    def get_history(self, user_id: int) -> list[Transaction]:
-        """Возвращает журнал операций пользователя."""
-        return self._tx_repo.get_all_by_user(user_id)
+    def get_history(
+        self,
+        user_id: int,
+        *,
+        date_from: date | None = None,
+        date_to: date | None = None,
+        account_id: int | None = None,
+        category_id: int | None = None,
+        tx_type: TransactionType | None = None,
+    ) -> list[Transaction]:
+        """Возвращает историю операций пользователя с необязательными фильтрами."""
+        if date_from is not None and date_to is not None and date_from > date_to:
+            raise ValueError("Начальная дата не может быть позже конечной.")
+
+        if account_id is not None:
+            account = self._account_repo.get_by_id(account_id)
+            if not account or account.user_id != user_id:
+                raise PermissionError(
+                    "Счет не найден или принадлежит другому пользователю."
+                )
+
+        if category_id is not None:
+            category = self._category_repo.get_by_id(category_id)
+            if not category or category.user_id != user_id:
+                raise PermissionError(
+                    "Категория не найдена или принадлежит другому пользователю."
+                )
+
+        transactions = self._tx_repo.get_all_by_user(user_id)
+
+        return [
+            tx
+            for tx in transactions
+            if (date_from is None or tx.timestamp.date() >= date_from)
+            and (date_to is None or tx.timestamp.date() <= date_to)
+            and (
+                account_id is None
+                or tx.account_id == account_id
+                or tx.to_account_id == account_id
+            )
+            and (category_id is None or tx.category_id == category_id)
+            and (tx_type is None or tx.transaction_type == tx_type)
+        ]

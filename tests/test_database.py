@@ -12,6 +12,7 @@ from sqlalchemy.exc import DataError, IntegrityError
 from sqlalchemy.orm import Session, sessionmaker
 
 from src import main as application
+from src.cli.terminal_interface import TerminalInterface
 from src.database.mappers import UserMapper
 from src.database.models import (
     AccountORM,
@@ -32,6 +33,7 @@ from src.repositories.sqlalchemy import (
 )
 from src.services.account import AccountService
 from src.services.budget import BudgetService
+from src.services.category import CategoryService
 from src.services.export import ExportService
 from src.services.transaction import TransactionService
 
@@ -184,10 +186,224 @@ def test_many_to_many_and_export(
     assert len(row.categories) == 2
     output = ExportService(
         SQLAlchemyAccountRepository(session), SQLAlchemyCategoryRepository(session)
-    ).export_to_csv(service.get_history(owner))
+    ).export_to_csv(owner, service.get_history(owner))
     assert output.encode("utf-8").startswith(b"\xef\xbb\xbf")
     assert "ID;Дата и время;Тип;Счет;Категория;Сумма (руб.)" in output
     assert "Продукты" in output and "Без категории" in output
+
+
+def test_export_rejects_foreign_transaction(
+    session: Session, records: tuple[int, int, int, int, int]
+) -> None:
+    """Запрещает экспорт операции другого пользователя."""
+    owner, source, _, _, _ = records
+    other = UserMapper.to_orm(
+        User(
+            0,
+            "Другой",
+            "other-export@capitaltracker.local",
+            "!disabled",
+            datetime.now(),
+        )
+    )
+    session.add(other)
+    session.flush()
+
+    foreign_tx = Transaction(
+        1,
+        other.id,
+        TransactionType.EXPENSE,
+        Decimal("10"),
+        source,
+        None,
+        datetime.now(),
+    )
+    exporter = ExportService(
+        SQLAlchemyAccountRepository(session), SQLAlchemyCategoryRepository(session)
+    )
+
+    with pytest.raises(PermissionError):
+        exporter.export_to_csv(owner, [foreign_tx])
+
+
+def test_export_rejects_mixed_owners(
+    session: Session, records: tuple[int, int, int, int, int]
+) -> None:
+    """Запрещает частичный экспорт списка с разными владельцами."""
+    owner, source, _, expense, _ = records
+    other = UserMapper.to_orm(
+        User(
+            0, "Другой", "other-mixed@capitaltracker.local", "!disabled", datetime.now()
+        )
+    )
+    session.add(other)
+    session.flush()
+
+    service = transaction_service(session)
+    own_tx = service.register_transaction(
+        owner, TransactionType.EXPENSE, Decimal("10"), source, expense
+    )
+    foreign_tx = Transaction(
+        2,
+        other.id,
+        TransactionType.EXPENSE,
+        Decimal("5"),
+        source,
+        expense,
+        datetime.now(),
+    )
+    exporter = ExportService(
+        SQLAlchemyAccountRepository(session), SQLAlchemyCategoryRepository(session)
+    )
+
+    with pytest.raises(PermissionError):
+        exporter.export_to_csv(owner, [own_tx, foreign_tx])
+
+
+def test_export_rejects_foreign_account_in_transaction(
+    session: Session, records: tuple[int, int, int, int, int]
+) -> None:
+    """Проверяет владельца основного счета в доменном объекте."""
+    owner, _, _, _, _ = records
+    other = UserMapper.to_orm(
+        User(
+            0,
+            "Другой",
+            "other-account@capitaltracker.local",
+            "!disabled",
+            datetime.now(),
+        )
+    )
+    session.add(other)
+    session.flush()
+    foreign_account = AccountService(
+        SQLAlchemyAccountRepository(session)
+    ).create_account(other.id, "Чужой", AccountType.CASH, Decimal("0"))
+
+    tx = Transaction(
+        1,
+        owner,
+        TransactionType.EXPENSE,
+        Decimal("10"),
+        foreign_account.id,
+        None,
+        datetime.now(),
+    )
+    exporter = ExportService(
+        SQLAlchemyAccountRepository(session), SQLAlchemyCategoryRepository(session)
+    )
+
+    with pytest.raises(PermissionError):
+        exporter.export_to_csv(owner, [tx])
+
+
+def test_export_rejects_foreign_category(
+    session: Session, records: tuple[int, int, int, int, int]
+) -> None:
+    """Проверяет владельца категории в доменном объекте."""
+    owner, source, _, _, _ = records
+    other = UserMapper.to_orm(
+        User(
+            0,
+            "Другой",
+            "other-category@capitaltracker.local",
+            "!disabled",
+            datetime.now(),
+        )
+    )
+    session.add(other)
+    session.flush()
+    foreign_category = CategoryORM(user_id=other.id, name="Чужая", direction="EXPENSE")
+    session.add(foreign_category)
+    session.flush()
+
+    tx = Transaction(
+        1,
+        owner,
+        TransactionType.EXPENSE,
+        Decimal("10"),
+        source,
+        foreign_category.id,
+        datetime.now(),
+    )
+    exporter = ExportService(
+        SQLAlchemyAccountRepository(session), SQLAlchemyCategoryRepository(session)
+    )
+
+    with pytest.raises(PermissionError):
+        exporter.export_to_csv(owner, [tx])
+
+
+def test_export_rejects_foreign_transfer_target(
+    session: Session, records: tuple[int, int, int, int, int]
+) -> None:
+    """Проверяет владельца целевого счета перевода."""
+    owner, source, _, _, _ = records
+    other = UserMapper.to_orm(
+        User(
+            0,
+            "Другой",
+            "other-target@capitaltracker.local",
+            "!disabled",
+            datetime.now(),
+        )
+    )
+    session.add(other)
+    session.flush()
+    foreign_account = AccountService(
+        SQLAlchemyAccountRepository(session)
+    ).create_account(other.id, "Чужой", AccountType.CASH, Decimal("0"))
+
+    tx = Transaction(
+        1,
+        owner,
+        TransactionType.TRANSFER,
+        Decimal("10"),
+        source,
+        None,
+        datetime.now(),
+        foreign_account.id,
+    )
+    exporter = ExportService(
+        SQLAlchemyAccountRepository(session), SQLAlchemyCategoryRepository(session)
+    )
+
+    with pytest.raises(PermissionError):
+        exporter.export_to_csv(owner, [tx])
+
+
+def test_export_allows_archived_account_history(
+    session: Session, records: tuple[int, int, int, int, int]
+) -> None:
+    """Разрешает экспорт истории собственного архивного счета."""
+    owner, source, _, expense, _ = records
+    service = transaction_service(session)
+    service.register_transaction(
+        owner, TransactionType.EXPENSE, Decimal("10"), source, expense
+    )
+    AccountService(SQLAlchemyAccountRepository(session)).archive_account(source, owner)
+
+    exporter = ExportService(
+        SQLAlchemyAccountRepository(session), SQLAlchemyCategoryRepository(session)
+    )
+    output = exporter.export_to_csv(owner, service.get_history(owner))
+
+    assert "Продукты" in output
+
+
+def test_export_empty_history_has_bom_and_headers(
+    session: Session, records: tuple[int, int, int, int, int]
+) -> None:
+    """Проверяет BOM и заголовки CSV при пустом списке операций."""
+    owner, _, _, _, _ = records
+    exporter = ExportService(
+        SQLAlchemyAccountRepository(session), SQLAlchemyCategoryRepository(session)
+    )
+
+    output = exporter.export_to_csv(owner, [])
+
+    assert output.encode("utf-8").startswith(b"\xef\xbb\xbf")
+    assert "ID;Дата и время;Тип;Счет;Категория;Сумма (руб.)" in output
 
 
 @pytest.mark.parametrize("amount", ["0", "-1", "NaN", "Infinity", "-Infinity"])
@@ -530,3 +746,435 @@ def test_money_validation_preserves_transfer_capital(
     accounts = AccountService(SQLAlchemyAccountRepository(session))
     assert accounts.calculate_total_capital(owner) == Decimal("1500")
     assert transaction_service(session).get_history(owner) == []
+
+
+def test_history_filters_by_inclusive_dates(
+    session: Session, records: tuple[int, int, int, int, int]
+) -> None:
+    """Проверяет включительность границ периода и исключение операций вне него."""
+    owner, source, _, expense, _ = records
+    service = transaction_service(session)
+
+    transactions = [
+        service.register_transaction(
+            owner, TransactionType.EXPENSE, Decimal("1"), source, expense
+        )
+        for _ in range(4)
+    ]
+
+    timestamps = [
+        datetime(2025, 12, 31, 23, 59),
+        datetime(2026, 1, 1, 0, 0),
+        datetime(2026, 1, 3, 23, 59),
+        datetime(2026, 1, 4, 0, 0),
+    ]
+
+    for tx, timestamp in zip(transactions, timestamps, strict=True):
+        session.execute(
+            update(TransactionORM)
+            .where(TransactionORM.id == tx.id)
+            .values(timestamp=timestamp)
+        )
+
+    session.flush()
+
+    result = service.get_history(
+        owner,
+        date_from=datetime(2026, 1, 1).date(),
+        date_to=datetime(2026, 1, 3).date(),
+    )
+
+    assert [tx.id for tx in result] == [
+        transactions[1].id,
+        transactions[2].id,
+    ]
+
+
+def test_history_rejects_invalid_date_range(
+    session: Session, records: tuple[int, int, int, int, int]
+) -> None:
+    """Проверяет запрет диапазона, в котором начальная дата позже конечной."""
+    owner = records[0]
+
+    with pytest.raises(ValueError):
+        transaction_service(session).get_history(
+            owner,
+            date_from=datetime(2026, 1, 2).date(),
+            date_to=datetime(2026, 1, 1).date(),
+        )
+
+
+def test_history_filters_by_transaction_type(
+    session: Session, records: tuple[int, int, int, int, int]
+) -> None:
+    """Проверяет фильтрацию истории по типу операции."""
+    owner, source, _, expense, income = records
+    service = transaction_service(session)
+
+    expense_tx = service.register_transaction(
+        owner, TransactionType.EXPENSE, Decimal("1"), source, expense
+    )
+    income_tx = service.register_transaction(
+        owner, TransactionType.INCOME, Decimal("1"), source, income
+    )
+
+    result = service.get_history(owner, tx_type=TransactionType.EXPENSE)
+
+    assert [tx.id for tx in result] == [expense_tx.id]
+    assert income_tx.id not in [tx.id for tx in result]
+
+
+def test_history_filters_by_category(
+    session: Session, records: tuple[int, int, int, int, int]
+) -> None:
+    """Проверяет фильтрацию истории по категории."""
+    owner, source, _, expense, income = records
+    service = transaction_service(session)
+
+    expense_tx = service.register_transaction(
+        owner, TransactionType.EXPENSE, Decimal("1"), source, expense
+    )
+    income_tx = service.register_transaction(
+        owner, TransactionType.INCOME, Decimal("1"), source, income
+    )
+
+    result = service.get_history(owner, category_id=expense)
+
+    assert [tx.id for tx in result] == [expense_tx.id]
+    assert income_tx.id not in [tx.id for tx in result]
+
+
+def test_history_filters_by_account(
+    session: Session, records: tuple[int, int, int, int, int]
+) -> None:
+    """Проверяет фильтрацию истории по счету."""
+    owner, source, target, expense, income = records
+    service = transaction_service(session)
+
+    source_tx = service.register_transaction(
+        owner, TransactionType.EXPENSE, Decimal("1"), source, expense
+    )
+    target_tx = service.register_transaction(
+        owner, TransactionType.INCOME, Decimal("1"), target, income
+    )
+
+    result = service.get_history(owner, account_id=source)
+
+    assert [tx.id for tx in result] == [source_tx.id]
+    assert target_tx.id not in [tx.id for tx in result]
+
+
+def test_history_combines_multiple_filters(
+    session: Session, records: tuple[int, int, int, int, int]
+) -> None:
+    """Проверяет совместное применение нескольких фильтров истории."""
+    owner, source, target, expense, income = records
+    service = transaction_service(session)
+
+    matching_tx = service.register_transaction(
+        owner, TransactionType.EXPENSE, Decimal("1"), source, expense
+    )
+    wrong_category_tx = service.register_transaction(
+        owner, TransactionType.INCOME, Decimal("1"), source, income
+    )
+    wrong_type_tx = service.register_transaction(
+        owner, TransactionType.INCOME, Decimal("1"), source, income
+    )
+    wrong_account_tx = service.register_transaction(
+        owner, TransactionType.EXPENSE, Decimal("1"), target, expense
+    )
+
+    timestamp = datetime(2026, 1, 2, 12, 0)
+    for tx in (matching_tx, wrong_category_tx, wrong_type_tx, wrong_account_tx):
+        session.execute(
+            update(TransactionORM)
+            .where(TransactionORM.id == tx.id)
+            .values(timestamp=timestamp)
+        )
+
+    result = service.get_history(
+        owner,
+        date_from=datetime(2026, 1, 1).date(),
+        date_to=datetime(2026, 1, 3).date(),
+        account_id=source,
+        category_id=expense,
+        tx_type=TransactionType.EXPENSE,
+    )
+
+    assert [tx.id for tx in result] == [matching_tx.id]
+
+
+def test_history_without_filters_returns_all_user_transactions(
+    session: Session, records: tuple[int, int, int, int, int]
+) -> None:
+    """Проверяет получение всей истории пользователя без фильтров."""
+    owner, source, target, expense, income = records
+    service = transaction_service(session)
+
+    first_tx = service.register_transaction(
+        owner, TransactionType.EXPENSE, Decimal("1"), source, expense
+    )
+    second_tx = service.register_transaction(
+        owner, TransactionType.INCOME, Decimal("2"), target, income
+    )
+
+    result = service.get_history(owner)
+
+    assert [tx.id for tx in result] == [first_tx.id, second_tx.id]
+
+
+def test_history_returns_empty_list_when_no_transactions_match(
+    session: Session, records: tuple[int, int, int, int, int]
+) -> None:
+    """Проверяет возврат пустого списка при отсутствии совпадений."""
+    owner = records[0]
+
+    result = transaction_service(session).get_history(
+        owner,
+        date_from=datetime(2026, 1, 1).date(),
+        date_to=datetime(2026, 1, 31).date(),
+    )
+
+    assert result == []
+
+
+def test_history_rejects_foreign_account_and_category(
+    session: Session, records: tuple[int, int, int, int, int]
+) -> None:
+    """Проверяет запрет фильтрации истории по чужому счету и категории."""
+    owner = records[0]
+
+    other = UserMapper.to_orm(
+        User(0, "Другой", "other@capitaltracker.local", "!disabled", datetime.now())
+    )
+    session.add(other)
+    session.flush()
+
+    foreign_account = AccountService(
+        SQLAlchemyAccountRepository(session)
+    ).create_account(other.id, "Чужой", AccountType.CASH, Decimal("0"))
+
+    foreign_category = CategoryORM(user_id=other.id, name="Чужая", direction="EXPENSE")
+    session.add(foreign_category)
+    session.flush()
+
+    service = transaction_service(session)
+
+    with pytest.raises(PermissionError):
+        service.get_history(owner, account_id=foreign_account.id)
+
+    with pytest.raises(PermissionError):
+        service.get_history(owner, category_id=foreign_category.id)
+
+
+def test_history_is_available_for_own_archived_account(
+    session: Session, records: tuple[int, int, int, int, int]
+) -> None:
+    """Проверяет доступность истории собственного архивного счета."""
+    owner, source, target, expense, _ = records
+    service = transaction_service(session)
+
+    tx = service.register_transaction(
+        owner, TransactionType.EXPENSE, Decimal("1"), target, expense
+    )
+
+    AccountService(SQLAlchemyAccountRepository(session)).archive_account(target, owner)
+
+    result = service.get_history(owner, account_id=target)
+
+    assert [item.id for item in result] == [tx.id]
+
+
+def test_history_finds_transfer_by_source_account(
+    session: Session, records: tuple[int, int, int, int, int]
+) -> None:
+    """Проверяет поиск перевода по исходному счету."""
+    owner, source, target, _, _ = records
+    service = transaction_service(session)
+
+    transfer = service.make_transfer(owner, source, target, Decimal("10"))
+
+    result = service.get_history(owner, account_id=source)
+
+    assert transfer.id in [tx.id for tx in result]
+
+
+def test_history_finds_transfer_by_target_account(
+    session: Session, records: tuple[int, int, int, int, int]
+) -> None:
+    """Проверяет поиск перевода по целевому счету."""
+    owner, source, target, _, _ = records
+    service = transaction_service(session)
+
+    transfer = service.make_transfer(owner, source, target, Decimal("10"))
+
+    result = service.get_history(owner, account_id=target)
+
+    assert transfer.id in [tx.id for tx in result]
+
+
+def test_reading_history_does_not_change_account_balances(
+    session: Session, records: tuple[int, int, int, int, int]
+) -> None:
+    """Проверяет, что чтение истории не изменяет остатки на счетах."""
+    owner, source, target, expense, _ = records
+    service = transaction_service(session)
+
+    source_before = SQLAlchemyAccountRepository(session).get_by_id(source)
+    target_before = SQLAlchemyAccountRepository(session).get_by_id(target)
+
+    assert source_before is not None
+    assert target_before is not None
+
+    source_balance = source_before.balance
+    target_balance = target_before.balance
+
+    service.get_history(owner, account_id=source)
+    service.get_history(owner, account_id=target)
+
+    source_after = SQLAlchemyAccountRepository(session).get_by_id(source)
+    target_after = SQLAlchemyAccountRepository(session).get_by_id(target)
+
+    assert source_after is not None
+    assert target_after is not None
+    assert source_after.balance == source_balance
+    assert target_after.balance == target_balance
+
+
+def test_cli_uses_same_filters_for_history_and_csv(
+    session: Session,
+    records: tuple[int, int, int, int, int],
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    """Журнал и CSV используют одинаковые фильтры без изменения балансов."""
+    owner, source, _, expense_category, income_category = records
+
+    account_repo = SQLAlchemyAccountRepository(session)
+    category_repo = SQLAlchemyCategoryRepository(session)
+    tx_repo = SQLAlchemyTransactionRepository(session)
+
+    tx_service = transaction_service(session)
+    expense_tx = tx_service.register_transaction(
+        owner,
+        TransactionType.EXPENSE,
+        Decimal("12.34"),
+        source,
+        expense_category,
+    )
+    income_tx = tx_service.register_transaction(
+        owner,
+        TransactionType.INCOME,
+        Decimal("56.78"),
+        source,
+        income_category,
+    )
+
+    interface = TerminalInterface(
+        owner,
+        AccountService(account_repo),
+        tx_service,
+        BudgetService(SQLAlchemyBudgetRepository(session), tx_repo, category_repo),
+        CategoryService(category_repo),
+        ExportService(account_repo, category_repo),
+    )
+
+    session.flush()
+    account_before = session.get(AccountORM, source)
+    assert account_before is not None
+    balance_before = account_before.balance
+
+    answers = iter(["", "", "", "", "2"])
+    monkeypatch.setattr("builtins.input", lambda _: next(answers))
+    interface._handle_show_history()
+    journal_output = capsys.readouterr().out
+
+    monkeypatch.chdir(tmp_path)
+    answers = iter(["", "", "", "", "2"])
+    monkeypatch.setattr("builtins.input", lambda _: next(answers))
+    interface._handle_export_csv()
+    export_output = capsys.readouterr().out
+
+    csv_output = (tmp_path / "transactions_export.csv").read_text(encoding="utf-8")
+
+    assert f"#{expense_tx.id}" in journal_output
+    assert f"#{income_tx.id}" not in journal_output
+    assert "12.34" in journal_output
+    assert "12.34" in csv_output
+    assert "56.78" not in csv_output
+    assert "выгружены" in export_output
+
+    account_after = session.get(AccountORM, source)
+    assert account_after is not None
+    balance_after = account_after.balance
+    assert balance_after == balance_before
+
+
+@pytest.mark.parametrize("choice", ["5", "8"])
+@pytest.mark.parametrize("existing_file", [False, True])
+@pytest.mark.parametrize("invalid_filter", ["date", "type", "foreign_account"])
+def test_cli_invalid_filters_preserve_csv(
+    session: Session,
+    records: tuple[int, int, int, int, int],
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+    capsys: pytest.CaptureFixture[str],
+    choice: str,
+    existing_file: bool,
+    invalid_filter: str,
+) -> None:
+    """Ошибочные фильтры отменяют журнал и экспорт без изменения файла и данных."""
+    owner, source, _, expense, _ = records
+    service = transaction_service(session)
+    service.register_transaction(
+        owner, TransactionType.EXPENSE, Decimal("12.34"), source, expense
+    )
+    balance_before = AccountService(
+        SQLAlchemyAccountRepository(session)
+    ).calculate_total_capital(owner)
+    history_before = service.get_history(owner)
+    filters = ["", "", "", "", ""]
+    if invalid_filter == "date":
+        filters[0] = "2026-02-30"
+    elif invalid_filter == "type":
+        filters[4] = "4"
+    else:
+        other = UserMapper.to_orm(
+            User(
+                0, "Другой", "filter@capitaltracker.local", "!disabled", datetime.now()
+            )
+        )
+        session.add(other)
+        session.flush()
+        account = AccountService(SQLAlchemyAccountRepository(session)).create_account(
+            other.id, "Чужой", AccountType.CASH, Decimal("0")
+        )
+        filters[2] = str(account.id)
+
+    monkeypatch.chdir(tmp_path)
+    csv_path = tmp_path / "transactions_export.csv"
+    original = b"previous export\r\n"
+    if existing_file:
+        csv_path.write_bytes(original)
+    answers = iter([choice, *filters])
+    monkeypatch.setattr("builtins.input", lambda _: next(answers))
+
+    assert application.build_interface(session, owner).run_once()
+
+    output = capsys.readouterr().out
+    assert "[!]" in output
+    assert "Журнал транзакций:" not in output
+    assert "выгружены" not in output
+    assert "\\n" not in output
+    if existing_file:
+        assert csv_path.read_bytes() == original
+    else:
+        assert not csv_path.exists()
+    assert service.get_history(owner) == history_before
+    assert (
+        AccountService(SQLAlchemyAccountRepository(session)).calculate_total_capital(
+            owner
+        )
+        == balance_before
+    )

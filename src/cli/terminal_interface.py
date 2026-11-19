@@ -1,10 +1,11 @@
+from datetime import date
 from decimal import Decimal
 from enum import IntEnum
 from typing import TypeVar
 
 from src.models.account import AccountType
 from src.models.category import CategoryDirection
-from src.models.transaction import TransactionType
+from src.models.transaction import Transaction, TransactionType
 from src.services.account import AccountService
 from src.services.budget import BudgetService
 from src.services.category import CategoryService
@@ -70,6 +71,24 @@ class TransactionKindChoice(IntEnum):
         return CategoryDirection.INCOME
 
 
+class HistoryTypeChoice(IntEnum):
+    """Выбор типа операции для фильтрации истории."""
+
+    INCOME = 1
+    EXPENSE = 2
+    TRANSFER = 3
+
+    @property
+    def to_domain(self) -> TransactionType:
+        """Преобразует выбор CLI в доменный тип операции."""
+        mapping = {
+            HistoryTypeChoice.INCOME: TransactionType.INCOME,
+            HistoryTypeChoice.EXPENSE: TransactionType.EXPENSE,
+            HistoryTypeChoice.TRANSFER: TransactionType.TRANSFER,
+        }
+        return mapping[self]
+
+
 class BudgetActionChoice(IntEnum):
     """Выбор действия в подменю бюджетов."""
 
@@ -131,7 +150,7 @@ class TerminalInterface:
         print("5. Журнал операций")
         print("6. Бюджеты и контроль лимитов")
         print("7. Удалить операцию (Откат остатка)")
-        print("8. Экспорт журнала в CSV (Результат доработки)")
+        print("8. Экспорт отфильтрованного журнала в CSV")
         print("9. Заархивировать счет")
         print("0. Выход")
         print("-" * 55)
@@ -230,9 +249,59 @@ class TerminalInterface:
         self._tx_svc.make_transfer(self._user_id, int(raw_from), int(raw_to), amount)
         print("[OK] Перевод успешно выполнен. Совокупный капитал неизменен.")
 
+    def _read_history_filters(self) -> list[Transaction] | None:
+        """Считывает общие фильтры и возвращает отобранные операции."""
+        print("\nФильтры журнала (пустое поле — без фильтра).")
+
+        raw_date_from = input("Дата от [ГГГГ-ММ-ДД]: ").strip()
+        raw_date_to = input("Дата до [ГГГГ-ММ-ДД]: ").strip()
+        raw_account_id = input("ID счета: ").strip()
+        raw_category_id = input("ID категории: ").strip()
+        raw_type = input("Тип операции (1 — доход, 2 — расход, 3 — перевод): ").strip()
+
+        try:
+            date_from = date.fromisoformat(raw_date_from) if raw_date_from else None
+            date_to = date.fromisoformat(raw_date_to) if raw_date_to else None
+
+            if raw_account_id and not raw_account_id.isdigit():
+                raise ValueError("ID счета должен быть целым положительным числом.")
+            if raw_category_id and not raw_category_id.isdigit():
+                raise ValueError("ID категории должен быть целым положительным числом.")
+
+            account_id = int(raw_account_id) if raw_account_id else None
+            category_id = int(raw_category_id) if raw_category_id else None
+
+            if account_id is not None and account_id <= 0:
+                raise ValueError("ID счета должен быть положительным числом.")
+            if category_id is not None and category_id <= 0:
+                raise ValueError("ID категории должен быть положительным числом.")
+
+            type_choice = HistoryTypeChoice(int(raw_type)) if raw_type else None
+            tx_type = type_choice.to_domain if type_choice else None
+
+        except ValueError as error:
+            print(f"[!] Некорректный фильтр: {error}")
+            return None
+
+        try:
+            return self._tx_svc.get_history(
+                self._user_id,
+                date_from=date_from,
+                date_to=date_to,
+                account_id=account_id,
+                category_id=category_id,
+                tx_type=tx_type,
+            )
+        except (ValueError, PermissionError) as error:
+            print(f"[!] Ошибка фильтрации: {error}")
+            return None
+
     def _handle_show_history(self) -> None:
-        """Отображает журнал операций."""
-        txs = self._tx_svc.get_history(self._user_id)
+        """Отображает журнал операций с фильтрами."""
+        txs = self._read_history_filters()
+        if txs is None:
+            return
+
         if not txs:
             print("\nЖурнал операций пуст.")
             return
@@ -294,9 +363,12 @@ class TerminalInterface:
         print("[OK] Транзакция удалена, остаток счета автоматически восстановлен.")
 
     def _handle_export_csv(self) -> None:
-        """Экспортирует данные в файл CSV."""
-        txs = self._tx_svc.get_history(self._user_id)
-        csv_data = self._exp_svc.export_to_csv(txs)
+        """Экспортирует отфильтрованные данные в файл CSV."""
+        txs = self._read_history_filters()
+        if txs is None:
+            return
+
+        csv_data = self._exp_svc.export_to_csv(self._user_id, txs)
         filename = "transactions_export.csv"
         with open(filename, "w", encoding="utf-8") as f:
             f.write(csv_data)

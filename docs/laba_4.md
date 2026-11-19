@@ -1080,7 +1080,7 @@ class CategoryService:
 #### `src/services/transaction.py`
 
 ```python
-from datetime import datetime
+from datetime import date, datetime
 from decimal import Decimal
 
 from src.models.category import CategoryDirection
@@ -1245,9 +1245,128 @@ class TransactionService:
 
         self._tx_repo.delete(transaction_id)
 
-    def get_history(self, user_id: int) -> list[Transaction]:
-        """Возвращает журнал операций пользователя."""
-        return self._tx_repo.get_all_by_user(user_id)
+    def get_history(
+        self,
+        user_id: int,
+        *,
+        date_from: date | None = None,
+        date_to: date | None = None,
+        account_id: int | None = None,
+        category_id: int | None = None,
+        tx_type: TransactionType | None = None,
+    ) -> list[Transaction]:
+        """Возвращает историю операций пользователя с необязательными фильтрами."""
+        if date_from is not None and date_to is not None and date_from > date_to:
+            raise ValueError("Начальная дата не может быть позже конечной.")
+
+        if account_id is not None:
+            account = self._account_repo.get_by_id(account_id)
+            if not account or account.user_id != user_id:
+                raise PermissionError(
+                    "Счет не найден или принадлежит другому пользователю."
+                )
+
+        if category_id is not None:
+            category = self._category_repo.get_by_id(category_id)
+            if not category or category.user_id != user_id:
+                raise PermissionError(
+                    "Категория не найдена или принадлежит другому пользователю."
+                )
+
+        transactions = self._tx_repo.get_all_by_user(user_id)
+
+        return [
+            tx
+            for tx in transactions
+            if (date_from is None or tx.timestamp.date() >= date_from)
+            and (date_to is None or tx.timestamp.date() <= date_to)
+            and (
+                account_id is None
+                or tx.account_id == account_id
+                or tx.to_account_id == account_id
+            )
+            and (category_id is None or tx.category_id == category_id)
+            and (tx_type is None or tx.transaction_type == tx_type)
+        ]
+```
+
+#### `src/services/export.py`
+
+```python
+import csv
+import io
+
+from src.models.transaction import Transaction
+from src.repositories.account import AccountRepository
+from src.repositories.category import CategoryRepository
+
+
+class ExportService:
+    """Сервис экспорта журнала операций в плоский формат CSV."""
+
+    def __init__(
+        self,
+        account_repo: AccountRepository,
+        category_repo: CategoryRepository,
+    ) -> None:
+        """Получает хранилища для подстановки имен счетов и категорий."""
+        self._account_repo = account_repo
+        self._category_repo = category_repo
+
+    def export_to_csv(self, user_id: int, transactions: list[Transaction]) -> str:
+        """Формирует CSV-файл после проверки принадлежности всех данных пользователю."""
+
+        for tx in transactions:
+            if tx.user_id != user_id:
+                raise PermissionError("Операция принадлежит другому пользователю.")
+
+            acc = self._account_repo.get_by_id(tx.account_id)
+            if not acc or acc.user_id != user_id:
+                raise PermissionError("Счет операции принадлежит другому пользователю.")
+
+            if tx.category_id is not None:
+                cat = self._category_repo.get_by_id(tx.category_id)
+                if not cat or cat.user_id != user_id:
+                    raise PermissionError(
+                        "Категория операции принадлежит другому пользователю."
+                    )
+
+            if tx.to_account_id is not None:
+                target = self._account_repo.get_by_id(tx.to_account_id)
+                if not target or target.user_id != user_id:
+                    raise PermissionError(
+                        "Целевой счет перевода принадлежит другому пользователю."
+                    )
+
+        output = io.StringIO()
+        output.write("\ufeff")
+        writer = csv.writer(output, delimiter=";")
+        writer.writerow(
+            ["ID", "Дата и время", "Тип", "Счет", "Категория", "Сумма (руб.)"]
+        )
+
+        for tx in transactions:
+            acc = self._account_repo.get_by_id(tx.account_id)
+            acc_name = acc.name if acc else "Неизвестный"
+
+            cat_name = "Без категории"
+            if tx.category_id is not None:
+                cat = self._category_repo.get_by_id(tx.category_id)
+                if cat:
+                    cat_name = cat.name
+
+            writer.writerow(
+                [
+                    tx.id,
+                    tx.timestamp.strftime("%Y-%m-%d %H:%M:%S"),
+                    tx.transaction_type.value,
+                    acc_name,
+                    cat_name,
+                    f"{tx.amount:.2f}",
+                ]
+            )
+
+        return output.getvalue()
 ```
 
 #### `src/services/budget.py`
@@ -1369,13 +1488,14 @@ class BudgetService:
 #### `src/cli/terminal_interface.py`
 
 ```python
+from datetime import date
 from decimal import Decimal
 from enum import IntEnum
 from typing import TypeVar
 
 from src.models.account import AccountType
 from src.models.category import CategoryDirection
-from src.models.transaction import TransactionType
+from src.models.transaction import Transaction, TransactionType
 from src.services.account import AccountService
 from src.services.budget import BudgetService
 from src.services.category import CategoryService
@@ -1441,6 +1561,24 @@ class TransactionKindChoice(IntEnum):
         return CategoryDirection.INCOME
 
 
+class HistoryTypeChoice(IntEnum):
+    """Выбор типа операции для фильтрации истории."""
+
+    INCOME = 1
+    EXPENSE = 2
+    TRANSFER = 3
+
+    @property
+    def to_domain(self) -> TransactionType:
+        """Преобразует выбор CLI в доменный тип операции."""
+        mapping = {
+            HistoryTypeChoice.INCOME: TransactionType.INCOME,
+            HistoryTypeChoice.EXPENSE: TransactionType.EXPENSE,
+            HistoryTypeChoice.TRANSFER: TransactionType.TRANSFER,
+        }
+        return mapping[self]
+
+
 class BudgetActionChoice(IntEnum):
     """Выбор действия в подменю бюджетов."""
 
@@ -1502,7 +1640,7 @@ class TerminalInterface:
         print("5. Журнал операций")
         print("6. Бюджеты и контроль лимитов")
         print("7. Удалить операцию (Откат остатка)")
-        print("8. Экспорт журнала в CSV (Результат доработки)")
+        print("8. Экспорт отфильтрованного журнала в CSV")
         print("9. Заархивировать счет")
         print("0. Выход")
         print("-" * 55)
@@ -1601,9 +1739,59 @@ class TerminalInterface:
         self._tx_svc.make_transfer(self._user_id, int(raw_from), int(raw_to), amount)
         print("[OK] Перевод успешно выполнен. Совокупный капитал неизменен.")
 
+    def _read_history_filters(self) -> list[Transaction] | None:
+        """Считывает общие фильтры и возвращает отобранные операции."""
+        print("\nФильтры журнала (пустое поле — без фильтра).")
+
+        raw_date_from = input("Дата от [ГГГГ-ММ-ДД]: ").strip()
+        raw_date_to = input("Дата до [ГГГГ-ММ-ДД]: ").strip()
+        raw_account_id = input("ID счета: ").strip()
+        raw_category_id = input("ID категории: ").strip()
+        raw_type = input("Тип операции (1 — доход, 2 — расход, 3 — перевод): ").strip()
+
+        try:
+            date_from = date.fromisoformat(raw_date_from) if raw_date_from else None
+            date_to = date.fromisoformat(raw_date_to) if raw_date_to else None
+
+            if raw_account_id and not raw_account_id.isdigit():
+                raise ValueError("ID счета должен быть целым положительным числом.")
+            if raw_category_id and not raw_category_id.isdigit():
+                raise ValueError("ID категории должен быть целым положительным числом.")
+
+            account_id = int(raw_account_id) if raw_account_id else None
+            category_id = int(raw_category_id) if raw_category_id else None
+
+            if account_id is not None and account_id <= 0:
+                raise ValueError("ID счета должен быть положительным числом.")
+            if category_id is not None and category_id <= 0:
+                raise ValueError("ID категории должен быть положительным числом.")
+
+            type_choice = HistoryTypeChoice(int(raw_type)) if raw_type else None
+            tx_type = type_choice.to_domain if type_choice else None
+
+        except ValueError as error:
+            print(f"[!] Некорректный фильтр: {error}")
+            return None
+
+        try:
+            return self._tx_svc.get_history(
+                self._user_id,
+                date_from=date_from,
+                date_to=date_to,
+                account_id=account_id,
+                category_id=category_id,
+                tx_type=tx_type,
+            )
+        except (ValueError, PermissionError) as error:
+            print(f"[!] Ошибка фильтрации: {error}")
+            return None
+
     def _handle_show_history(self) -> None:
-        """Отображает журнал операций."""
-        txs = self._tx_svc.get_history(self._user_id)
+        """Отображает журнал операций с фильтрами."""
+        txs = self._read_history_filters()
+        if txs is None:
+            return
+
         if not txs:
             print("\nЖурнал операций пуст.")
             return
@@ -1665,9 +1853,12 @@ class TerminalInterface:
         print("[OK] Транзакция удалена, остаток счета автоматически восстановлен.")
 
     def _handle_export_csv(self) -> None:
-        """Экспортирует данные в файл CSV."""
-        txs = self._tx_svc.get_history(self._user_id)
-        csv_data = self._exp_svc.export_to_csv(txs)
+        """Экспортирует отфильтрованные данные в файл CSV."""
+        txs = self._read_history_filters()
+        if txs is None:
+            return
+
+        csv_data = self._exp_svc.export_to_csv(self._user_id, txs)
         filename = "transactions_export.csv"
         with open(filename, "w", encoding="utf-8") as f:
             f.write(csv_data)
@@ -2215,7 +2406,7 @@ $ uv run mypy src/ migrations/ tests/
 Success: no issues found in 34 source files
 
 $ uv run pytest -q
-47 passed
+80 passed
 
 $ uv build
 Successfully built dist/capital_tracker-0.1.0.tar.gz
@@ -2243,9 +2434,11 @@ No new upgrade operations detected.
 | Сбой записи | Ошибка INSERT после изменения обоих остатков откатывает их вместе; сбой второго обновления при отмене перевода сохраняет исходную операцию |
 | Бюджеты | Границы 80% и 100%; исключение доходов и другого периода; обновление суммы без смены ID; UNIQUE периода и CHECK месяца, года, суммы |
 | Изоляция | Составные FK запрещают чужие счета, целевой счет и категории; история выбирается по владельцу |
+| История операций | Фильтры по начальной и конечной дате, счету, категории и типу; границы дат включительные, все заданные условия объединяются через AND; для счета и категории проверяется принадлежность пользователю |
 | Каскады | RESTRICT сохраняет историю при попытке удаления владельца, счета и категории с загруженными и незагруженными коллекциями |
 | M:N | Обе стороны связи корректны; повторные операции не дублируют сущности в коллекции; перевод не добавляет категорию |
-| CSV | BOM, разделитель `;`, русский заголовок и имена; перевод экспортируется без категории |
+| CSV | BOM, разделитель `;`, русский заголовок и имена; перед экспортом проверяются владелец операции, исходный и целевой счета, а также категория; перевод экспортируется без категории |
+| Ошибочные фильтры CLI | Неверная дата, недопустимый тип и чужой счет отменяют просмотр и экспорт; CSV не создается и не перезаписывается, история и остатки сохраняются |
 | Валидация | Обязательная категория; непустое имя и конечный баланс счета; отклонение нечисловых и неположительных сумм, дробных копеек и переполнения |
 | Повторный запуск | Новый процесс читает сохраненный счет; повторный seed не дублирует профиль и категории |
 
@@ -2321,11 +2514,13 @@ docker compose exec -T db psql -U capitaltracker -d capitaltracker -c '\d+ trans
 | 17.11.2026 | Настройка PostgreSQL и Alembic | Контейнер готов; миграция сгенерирована, проверена и применена |
 | 17.11.2026 | Реализация ORM, мапперов, репозиториев и DI | CLI использует постоянное хранилище с транзакцией на команду |
 | 17.11.2026 | Проверка точности денег и ограничений | Дробные копейки отклоняются до записи; ограничения проверены на PostgreSQL |
-| 17.11.2026 | Приемочные проверки и повторный запуск | 47 тестов, Ruff, mypy, сборка, миграции и сохранность данных проверены |
+| 17.11.2026 | Приемочные проверки и повторный запуск | 68 тестов, Ruff, mypy, сборка, миграции и сохранность данных проверены |
 | 17.11.2026 | Завершение документации | Проверен `.gitignore`, технические инструкции `AGENTS.md` актуализированы по реализации лабораторной № 4 |
 
-Сохранены границы учебного этапа: один профиль CLI, отсутствие веб-авторизации и конвертации валют. CSV пока выгружает весь журнал текущего пользователя; фильтры целевой веб-версии не добавлялись. Суммы и вывод остаются рублевыми. Политика одновременного редактирования из нескольких клиентов требует отдельной проработки на этапе веб-приложения.
+Сохранены границы учебного этапа: один профиль CLI, отсутствие веб-авторизации и конвертации валют. В консольном интерфейсе реализованы фильтры истории и экспорта CSV по датам, счету, категории и типу операции. При экспорте дополнительно проверяется принадлежность пользователю операции и связанных с ней счетов и категории. Суммы и вывод остаются рублевыми. Политика одновременного редактирования из нескольких клиентов требует отдельной проработки на этапе веб-приложения.
 
 ---
 
 *Авторы отчета: студенты гр. ИВТ-262 ВолгГТУ Павловский И. Ю., Ларченко И. М. (2026 г.)*
+
+19.11.2026: исправлены переносы строк в CLI и синхронизирован его листинг; удален комментарий внутри теста. Добавлены 12 сценариев отмены при ошибочных фильтрах. Повторно выполнены Ruff, проверка форматирования, mypy и pytest: 80 тестов прошли на PostgreSQL.
