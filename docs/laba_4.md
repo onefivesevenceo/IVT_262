@@ -135,7 +135,7 @@ capital-tracker/
     │   ├── models.py              <-- Пять ORM-моделей
     │   ├── mappers.py             <-- Датаклассы ↔ ORM
     │   └── session.py             <-- Engine и фабрика Session
-    ├── repositories/sqlalchemy.py <-- Реализации существующих ABC-контрактов
+    ├── repositories/             <-- ABC, InMemory и SQLAlchemy по сущностям
     ├── services/money.py          <-- Конечность, диапазон и точность денег
     ├── cli/terminal_interface.py  <-- Одна команда за вызов run_once
     └── main.py                    <-- DI и граница транзакции команды
@@ -718,36 +718,93 @@ class BudgetLimitMapper:
 
 ### 4.3. Репозитории SQLAlchemy
 
-#### `src/repositories/sqlalchemy.py`
+#### `src/repositories/account.py`
 
 ```python
-"""Реализации существующих ABC-контрактов поверх переданной сессии."""
-
+from abc import ABC, abstractmethod
 from decimal import Decimal
 
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
-from src.database.mappers import (
-    AccountMapper,
-    BudgetLimitMapper,
-    CategoryMapper,
-    TransactionMapper,
-)
-from src.database.models import (
-    AccountORM,
-    BudgetLimitORM,
-    CategoryORM,
-    TransactionORM,
-)
+from src.database.mappers import AccountMapper
+from src.database.models import AccountORM
 from src.models.account import Account
-from src.models.budget import BudgetLimit
-from src.models.category import Category
-from src.models.transaction import Transaction
-from src.repositories.account import AccountRepository
-from src.repositories.budget import BudgetRepository
-from src.repositories.category import CategoryRepository
-from src.repositories.transaction import TransactionRepository
+
+
+class AccountRepository(ABC):
+    """Абстрактный контракт взаимодействия с хранилищем счетов."""
+
+    @abstractmethod
+    def add(self, account: Account) -> Account:
+        """Добавляет счет в хранилище."""
+
+    @abstractmethod
+    def get_by_id(self, account_id: int) -> Account | None:
+        """Возвращает счет по его идентификатору."""
+
+    @abstractmethod
+    def get_all_by_user(self, user_id: int) -> list[Account]:
+        """Возвращает все активные счета пользователя."""
+
+    @abstractmethod
+    def update_balance(self, account_id: int, new_balance: Decimal) -> None:
+        """Обновляет текущий остаток счета."""
+
+    @abstractmethod
+    def archive(self, account_id: int) -> None:
+        """Помечает счет как архивный."""
+
+
+class InMemoryAccountRepository(AccountRepository):
+    """Хранилище счетов в оперативной памяти."""
+
+    def __init__(self) -> None:
+        """Создает пустое хранилище и последовательность идентификаторов."""
+        self._storage: dict[int, Account] = {}
+        self._seq: int = 1
+
+    def add(self, account: Account) -> Account:
+        """Добавляет счет в оперативную память."""
+        saved = Account(
+            id=self._seq,
+            user_id=account.user_id,
+            name=account.name,
+            account_type=account.account_type,
+            balance=account.balance,
+            is_archived=account.is_archived,
+        )
+        self._storage[self._seq] = saved
+        self._seq += 1
+        return saved
+
+    def get_by_id(self, account_id: int) -> Account | None:
+        """Возвращает счет по его идентификатору."""
+        return self._storage.get(account_id)
+
+    def get_all_by_user(self, user_id: int) -> list[Account]:
+        """Возвращает все активные (не архивные) счета пользователя."""
+        return [
+            acc
+            for acc in self._storage.values()
+            if acc.user_id == user_id and not acc.is_archived
+        ]
+
+    def update_balance(self, account_id: int, new_balance: Decimal) -> None:
+        """Обновляет остаток счета. Если не найден — выбрасывает ошибку."""
+        account = self.get_by_id(account_id)
+        if not account:
+            msg = f"Счет с ID {account_id} не найден для обновления баланса."
+            raise ValueError(msg)
+        account.balance = new_balance
+
+    def archive(self, account_id: int) -> None:
+        """Помечает счет как архивный. Если не найден — выбрасывает ошибку."""
+        account = self.get_by_id(account_id)
+        if not account:
+            msg = f"Счет с ID {account_id} не найден для архивации."
+            raise ValueError(msg)
+        account.is_archived = True
 
 
 class SQLAlchemyAccountRepository(AccountRepository):
@@ -795,6 +852,64 @@ class SQLAlchemyAccountRepository(AccountRepository):
             raise ValueError(msg)
         row.is_archived = True
         self._session.flush()
+```
+
+#### `src/repositories/category.py`
+
+```python
+from abc import ABC, abstractmethod
+
+from sqlalchemy import select
+from sqlalchemy.orm import Session
+
+from src.database.mappers import CategoryMapper
+from src.database.models import CategoryORM
+from src.models.category import Category
+
+
+class CategoryRepository(ABC):
+    """Абстрактный контракт управления справочником категорий."""
+
+    @abstractmethod
+    def add(self, category: Category) -> Category:
+        """Добавляет категорию."""
+
+    @abstractmethod
+    def get_by_id(self, category_id: int) -> Category | None:
+        """Возвращает категорию по ID."""
+
+    @abstractmethod
+    def get_all_by_user(self, user_id: int) -> list[Category]:
+        """Возвращает список категорий пользователя."""
+
+
+class InMemoryCategoryRepository(CategoryRepository):
+    """Хранилище категорий классификации операций в оперативной памяти."""
+
+    def __init__(self) -> None:
+        """Создает пустое хранилище и последовательность идентификаторов."""
+        self._storage: dict[int, Category] = {}
+        self._seq: int = 1
+
+    def add(self, category: Category) -> Category:
+        """Добавляет категорию в память."""
+        saved = Category(
+            id=self._seq,
+            user_id=category.user_id,
+            name=category.name,
+            direction=category.direction,
+        )
+        self._storage[self._seq] = saved
+        self._seq += 1
+        return saved
+
+    def get_by_id(self, category_id: int) -> Category | None:
+        """Возвращает категорию по ID."""
+        return self._storage.get(category_id)
+
+    def get_all_by_user(self, user_id: int) -> list[Category]:
+        """Возвращает список категорий пользователя."""
+        return [cat for cat in self._storage.values() if cat.user_id == user_id]
 
 
 class SQLAlchemyCategoryRepository(CategoryRepository):
@@ -824,6 +939,76 @@ class SQLAlchemyCategoryRepository(CategoryRepository):
             .order_by(CategoryORM.id)
         )
         return [CategoryMapper.to_domain(row) for row in self._session.scalars(query)]
+```
+
+#### `src/repositories/transaction.py`
+
+```python
+from abc import ABC, abstractmethod
+
+from sqlalchemy import select
+from sqlalchemy.orm import Session
+
+from src.database.mappers import TransactionMapper
+from src.database.models import TransactionORM
+from src.models.transaction import Transaction
+
+
+class TransactionRepository(ABC):
+    """Абстрактный контракт взаимодействия с журналом транзакций."""
+
+    @abstractmethod
+    def add(self, transaction: Transaction) -> Transaction:
+        """Сохраняет новую транзакцию."""
+
+    @abstractmethod
+    def get_by_id(self, transaction_id: int) -> Transaction | None:
+        """Возвращает транзакцию по идентификатору."""
+
+    @abstractmethod
+    def get_all_by_user(self, user_id: int) -> list[Transaction]:
+        """Возвращает все операции конкретного пользователя."""
+
+    @abstractmethod
+    def delete(self, transaction_id: int) -> None:
+        """Удаляет операцию из журнала."""
+
+
+class InMemoryTransactionRepository(TransactionRepository):
+    """Хранилище транзакций в оперативной памяти."""
+
+    def __init__(self) -> None:
+        """Создает пустое хранилище и последовательность идентификаторов."""
+        self._storage: dict[int, Transaction] = {}
+        self._seq: int = 1
+
+    def add(self, transaction: Transaction) -> Transaction:
+        """Сохраняет транзакцию в памяти."""
+        saved = Transaction(
+            id=self._seq,
+            user_id=transaction.user_id,
+            transaction_type=transaction.transaction_type,
+            amount=transaction.amount,
+            account_id=transaction.account_id,
+            category_id=transaction.category_id,
+            timestamp=transaction.timestamp,
+            to_account_id=transaction.to_account_id,
+        )
+        self._storage[self._seq] = saved
+        self._seq += 1
+        return saved
+
+    def get_by_id(self, transaction_id: int) -> Transaction | None:
+        """Возвращает транзакцию по ее номеру."""
+        return self._storage.get(transaction_id)
+
+    def get_all_by_user(self, user_id: int) -> list[Transaction]:
+        """Возвращает историю операций пользователя."""
+        return [tx for tx in self._storage.values() if tx.user_id == user_id]
+
+    def delete(self, transaction_id: int) -> None:
+        """Удаляет запись транзакции по первичному ключу."""
+        self._storage.pop(transaction_id, None)
 
 
 class SQLAlchemyTransactionRepository(TransactionRepository):
@@ -862,6 +1047,64 @@ class SQLAlchemyTransactionRepository(TransactionRepository):
         if row is not None:
             self._session.delete(row)
             self._session.flush()
+```
+
+#### `src/repositories/budget.py`
+
+```python
+from abc import ABC, abstractmethod
+
+from sqlalchemy import select
+from sqlalchemy.orm import Session
+
+from src.database.mappers import BudgetLimitMapper
+from src.database.models import BudgetLimitORM
+from src.models.budget import BudgetLimit
+
+
+class BudgetRepository(ABC):
+    """Абстрактный контракт управления лимитами бюджетов."""
+
+    @abstractmethod
+    def set_limit(self, budget: BudgetLimit) -> BudgetLimit:
+        """Устанавливает или обновляет лимит."""
+
+    @abstractmethod
+    def get_limit(
+        self, user_id: int, category_id: int, month: int, year: int
+    ) -> BudgetLimit | None:
+        """Возвращает лимит на указанный период."""
+
+
+class InMemoryBudgetRepository(BudgetRepository):
+    """Хранилище месячных лимитов бюджетов в оперативной памяти."""
+
+    def __init__(self) -> None:
+        """Создает пустое хранилище и последовательность идентификаторов."""
+        self._storage: dict[str, BudgetLimit] = {}
+        self._seq: int = 1
+
+    def set_limit(self, budget: BudgetLimit) -> BudgetLimit:
+        """Устанавливает или перезаписывает лимит."""
+        key = f"{budget.user_id}:{budget.category_id}:{budget.month}:{budget.year}"
+        saved = BudgetLimit(
+            id=self._seq,
+            user_id=budget.user_id,
+            category_id=budget.category_id,
+            month=budget.month,
+            year=budget.year,
+            limit_amount=budget.limit_amount,
+        )
+        self._storage[key] = saved
+        self._seq += 1
+        return saved
+
+    def get_limit(
+        self, user_id: int, category_id: int, month: int, year: int
+    ) -> BudgetLimit | None:
+        """Возвращает лимит по ключу периода."""
+        key = f"{user_id}:{category_id}:{month}:{year}"
+        return self._storage.get(key)
 
 
 class SQLAlchemyBudgetRepository(BudgetRepository):
@@ -911,23 +1154,21 @@ class SQLAlchemyBudgetRepository(BudgetRepository):
 from src.repositories.account import (
     AccountRepository,
     InMemoryAccountRepository,
+    SQLAlchemyAccountRepository,
 )
 from src.repositories.budget import (
     BudgetRepository,
     InMemoryBudgetRepository,
+    SQLAlchemyBudgetRepository,
 )
 from src.repositories.category import (
     CategoryRepository,
     InMemoryCategoryRepository,
-)
-from src.repositories.sqlalchemy import (
-    SQLAlchemyAccountRepository,
-    SQLAlchemyBudgetRepository,
     SQLAlchemyCategoryRepository,
-    SQLAlchemyTransactionRepository,
 )
 from src.repositories.transaction import (
     InMemoryTransactionRepository,
+    SQLAlchemyTransactionRepository,
     TransactionRepository,
 )
 
@@ -1786,15 +2027,15 @@ class TerminalInterface:
             print(f"[!] Ошибка фильтрации: {error}")
             return None
 
-    def _handle_show_history(self) -> None:
-        """Отображает журнал операций с фильтрами."""
+    def _handle_show_history(self) -> bool:
+        """Показывает журнал и сообщает, доступна ли выборка для удаления."""
         txs = self._read_history_filters()
         if txs is None:
-            return
+            return False
 
         if not txs:
             print("\nЖурнал операций пуст.")
-            return
+            return False
 
         print("\nЖурнал транзакций:")
         for tx in txs:
@@ -1803,6 +2044,7 @@ class TerminalInterface:
                 f"{tx.transaction_type.value} | {tx.amount:.2f} руб. | "
                 f"Счет: {tx.account_id}"
             )
+        return True
 
     def _handle_budget_status(self) -> None:
         """Проверяет освоение бюджета."""
@@ -1843,7 +2085,8 @@ class TerminalInterface:
 
     def _handle_delete_transaction(self) -> None:
         """Удаляет транзакцию с откатом сальдо."""
-        self._handle_show_history()
+        if not self._handle_show_history():
+            return
         raw_tx_id = input("Введите ID транзакции для отмены: ").strip()
         if not raw_tx_id.isdigit():
             print("[!] Некорректный ID транзакции.")
@@ -1860,8 +2103,12 @@ class TerminalInterface:
 
         csv_data = self._exp_svc.export_to_csv(self._user_id, txs)
         filename = "transactions_export.csv"
-        with open(filename, "w", encoding="utf-8") as f:
-            f.write(csv_data)
+        try:
+            with open(filename, "w", encoding="utf-8") as f:
+                f.write(csv_data)
+        except OSError as error:
+            print(f"[!] Не удалось записать CSV: {error}")
+            return
         print(f"[OK] Данные выгружены в файл '{filename}' в кодировке UTF-8.")
 ```
 
@@ -1882,12 +2129,10 @@ from src.database.mappers import UserMapper
 from src.database.models import UserORM
 from src.database.session import SessionFactory
 from src.models.user import User
-from src.repositories.sqlalchemy import (
-    SQLAlchemyAccountRepository,
-    SQLAlchemyBudgetRepository,
-    SQLAlchemyCategoryRepository,
-    SQLAlchemyTransactionRepository,
-)
+from src.repositories.account import SQLAlchemyAccountRepository
+from src.repositories.budget import SQLAlchemyBudgetRepository
+from src.repositories.category import SQLAlchemyCategoryRepository
+from src.repositories.transaction import SQLAlchemyTransactionRepository
 from src.services.account import AccountService
 from src.services.budget import BudgetService
 from src.services.category import CategoryService
@@ -2400,13 +2645,13 @@ $ uv run ruff check src/ migrations/ tests/
 All checks passed!
 
 $ uv run ruff format --check src/ migrations/ tests/
-34 files already formatted
+33 files already formatted
 
 $ uv run mypy src/ migrations/ tests/
-Success: no issues found in 34 source files
+Success: no issues found in 33 source files
 
 $ uv run pytest -q
-80 passed
+91 passed
 
 $ uv build
 Successfully built dist/capital_tracker-0.1.0.tar.gz
@@ -2438,7 +2683,8 @@ No new upgrade operations detected.
 | Каскады | RESTRICT сохраняет историю при попытке удаления владельца, счета и категории с загруженными и незагруженными коллекциями |
 | M:N | Обе стороны связи корректны; повторные операции не дублируют сущности в коллекции; перевод не добавляет категорию |
 | CSV | BOM, разделитель `;`, русский заголовок и имена; перед экспортом проверяются владелец операции, исходный и целевой счета, а также категория; перевод экспортируется без категории |
-| Ошибочные фильтры CLI | Неверная дата, недопустимый тип и чужой счет отменяют просмотр и экспорт; CSV не создается и не перезаписывается, история и остатки сохраняются |
+| Ошибочные фильтры CLI | Неверная дата, недопустимый тип и чужой счет отменяют просмотр, удаление и экспорт; CSV не создается и не перезаписывается, история и остатки сохраняются |
+| Ошибки файловой системы | Ошибки открытия и записи CSV выводятся в CLI без завершения приложения; сообщение об успехе не выводится |
 | Валидация | Обязательная категория; непустое имя и конечный баланс счета; отклонение нечисловых и неположительных сумм, дробных копеек и переполнения |
 | Повторный запуск | Новый процесс читает сохраненный счет; повторный seed не дублирует профиль и категории |
 
@@ -2514,13 +2760,15 @@ docker compose exec -T db psql -U capitaltracker -d capitaltracker -c '\d+ trans
 | 17.11.2026 | Настройка PostgreSQL и Alembic | Контейнер готов; миграция сгенерирована, проверена и применена |
 | 17.11.2026 | Реализация ORM, мапперов, репозиториев и DI | CLI использует постоянное хранилище с транзакцией на команду |
 | 17.11.2026 | Проверка точности денег и ограничений | Дробные копейки отклоняются до записи; ограничения проверены на PostgreSQL |
-| 17.11.2026 | Приемочные проверки и повторный запуск | 68 тестов, Ruff, mypy, сборка, миграции и сохранность данных проверены |
+| 17.11.2026 | Приемочные проверки и повторный запуск | 47 тестов, Ruff, mypy, сборка, миграции и сохранность данных проверены |
 | 17.11.2026 | Завершение документации | Проверен `.gitignore`, технические инструкции `AGENTS.md` актуализированы по реализации лабораторной № 4 |
+
+| 19.11.2026 | Исправления фильтров и листингов после проверки PR | Исправлены переносы строк, добавлены 12 сценариев ошибочных фильтров; 80 тестов прошли |
+| 19.11.2026 | Замечания преподавателя к репозиториям | SQLAlchemy-классы перенесены к ABC и InMemory, параметры методов согласованы с ABC; 81 тест прошел |
+| 19.11.2026 | Проверка CLI и документации | Ошибки CSV обрабатываются, ошибка фильтра или пустая выборка отменяют удаление; 91 тест, Ruff, mypy, сборка и alembic check прошли |
 
 Сохранены границы учебного этапа: один профиль CLI, отсутствие веб-авторизации и конвертации валют. В консольном интерфейсе реализованы фильтры истории и экспорта CSV по датам, счету, категории и типу операции. При экспорте дополнительно проверяется принадлежность пользователю операции и связанных с ней счетов и категории. Суммы и вывод остаются рублевыми. Политика одновременного редактирования из нескольких клиентов требует отдельной проработки на этапе веб-приложения.
 
 ---
 
 *Авторы отчета: студенты гр. ИВТ-262 ВолгГТУ Павловский И. Ю., Ларченко И. М. (2026 г.)*
-
-19.11.2026: исправлены переносы строк в CLI и синхронизирован его листинг; удален комментарий внутри теста. Добавлены 12 сценариев отмены при ошибочных фильтрах. Повторно выполнены Ruff, проверка форматирования, mypy и pytest: 80 тестов прошли на PostgreSQL.

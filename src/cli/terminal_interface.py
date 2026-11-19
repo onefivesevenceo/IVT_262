@@ -296,15 +296,15 @@ class TerminalInterface:
             print(f"[!] Ошибка фильтрации: {error}")
             return None
 
-    def _handle_show_history(self) -> None:
-        """Отображает журнал операций с фильтрами."""
+    def _handle_show_history(self) -> bool:
+        """Показывает журнал и сообщает, доступна ли выборка для удаления."""
         txs = self._read_history_filters()
         if txs is None:
-            return
+            return False
 
         if not txs:
             print("\nЖурнал операций пуст.")
-            return
+            return False
 
         print("\nЖурнал транзакций:")
         for tx in txs:
@@ -313,6 +313,7 @@ class TerminalInterface:
                 f"{tx.transaction_type.value} | {tx.amount:.2f} руб. | "
                 f"Счет: {tx.account_id}"
             )
+        return True
 
     def _handle_budget_status(self) -> None:
         """Проверяет освоение бюджета."""
@@ -353,7 +354,8 @@ class TerminalInterface:
 
     def _handle_delete_transaction(self) -> None:
         """Удаляет транзакцию с откатом сальдо."""
-        self._handle_show_history()
+        if not self._handle_show_history():
+            return
         raw_tx_id = input("Введите ID транзакции для отмены: ").strip()
         if not raw_tx_id.isdigit():
             print("[!] Некорректный ID транзакции.")
@@ -370,6 +372,10 @@ class TerminalInterface:
 
         csv_data = self._exp_svc.export_to_csv(self._user_id, txs)
         filename = "transactions_export.csv"
-        with open(filename, "w", encoding="utf-8") as f:
-            f.write(csv_data)
+        try:
+            with open(filename, "w", encoding="utf-8") as f:
+                f.write(csv_data)
+        except OSError as error:
+            print(f"[!] Не удалось записать CSV: {error}")
+            return
         print(f"[OK] Данные выгружены в файл '{filename}' в кодировке UTF-8.")
