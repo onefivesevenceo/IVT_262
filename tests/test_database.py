@@ -1178,3 +1178,17 @@ def test_cli_invalid_filters_preserve_csv(
         )
         == balance_before
     )
+
+
+def test_in_memory_transaction_keyword_arguments() -> None:
+    """Проверяет совместимость именованных вызовов с контрактом репозитория."""
+    from src.repositories.transaction import InMemoryTransactionRepository
+
+    repository = InMemoryTransactionRepository()
+    transaction = Transaction(
+        0, 1, TransactionType.EXPENSE, Decimal("1.00"), 1, 1, datetime.now()
+    )
+    saved = repository.add(transaction=transaction)
+    assert repository.get_by_id(transaction_id=saved.id) == saved
+    repository.delete(transaction_id=saved.id)
+    assert repository.get_by_id(transaction_id=saved.id) is None
