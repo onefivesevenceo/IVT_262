@@ -20,14 +20,18 @@ class AccountService:
         initial_balance: Decimal,
     ) -> Account:
         """Создает новый финансовый счет пользователя."""
-        if not name.strip():
+        clean_name = name.strip()
+        if not clean_name:
             msg = "Наименование счета не может быть пустым."
+            raise ValueError(msg)
+        if len(clean_name) > 100:
+            msg = "Название счета должно содержать не более 100 символов."
             raise ValueError(msg)
         validate_money(initial_balance)
         account = Account(
             id=0,
             user_id=user_id,
-            name=name.strip(),
+            name=clean_name,
             account_type=account_type,
             balance=initial_balance,
         )

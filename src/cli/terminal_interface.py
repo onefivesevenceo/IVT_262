@@ -1,3 +1,6 @@
+import os
+import tempfile
+from contextlib import suppress
 from datetime import date
 from decimal import Decimal
 from enum import IntEnum
@@ -296,15 +299,15 @@ class TerminalInterface:
             print(f"[!] Ошибка фильтрации: {error}")
             return None
 
-    def _handle_show_history(self) -> bool:
-        """Показывает журнал и сообщает, доступна ли выборка для удаления."""
+    def _handle_show_history(self) -> set[int]:
+        """Показывает журнал и возвращает ID отображённых операций."""
         txs = self._read_history_filters()
         if txs is None:
-            return False
+            return set()
 
         if not txs:
             print("\nЖурнал операций пуст.")
-            return False
+            return set()
 
         print("\nЖурнал транзакций:")
         for tx in txs:
@@ -313,7 +316,7 @@ class TerminalInterface:
                 f"{tx.transaction_type.value} | {tx.amount:.2f} руб. | "
                 f"Счет: {tx.account_id}"
             )
-        return True
+        return {tx.id for tx in txs}
 
     def _handle_budget_status(self) -> None:
         """Проверяет освоение бюджета."""
@@ -354,13 +357,17 @@ class TerminalInterface:
 
     def _handle_delete_transaction(self) -> None:
         """Удаляет транзакцию с откатом сальдо."""
-        if not self._handle_show_history():
+        visible_ids = self._handle_show_history()
+        if not visible_ids:
             return
         raw_tx_id = input("Введите ID транзакции для отмены: ").strip()
         if not raw_tx_id.isdigit():
             print("[!] Некорректный ID транзакции.")
             return
         tx_id = int(raw_tx_id)
+        if tx_id not in visible_ids:
+            print("[!] Выберите ID операции из показанного списка.")
+            return
         self._tx_svc.delete_transaction(tx_id, self._user_id)
         print("[OK] Транзакция удалена, остаток счета автоматически восстановлен.")
 
@@ -372,10 +379,26 @@ class TerminalInterface:
 
         csv_data = self._exp_svc.export_to_csv(self._user_id, txs)
         filename = "transactions_export.csv"
+        temp_path = None
         try:
-            with open(filename, "w", encoding="utf-8") as f:
-                f.write(csv_data)
+            with tempfile.NamedTemporaryFile(
+                mode="w",
+                encoding="utf-8",
+                newline="",
+                dir=".",
+                prefix=".transactions_export_",
+                suffix=".tmp",
+                delete=False,
+            ) as file:
+                temp_path = file.name
+                file.write(csv_data)
+            os.replace(temp_path, filename)
+            temp_path = None
         except OSError as error:
             print(f"[!] Не удалось записать CSV: {error}")
             return
+        finally:
+            if temp_path is not None:
+                with suppress(OSError):
+                    os.unlink(temp_path)
         print(f"[OK] Данные выгружены в файл '{filename}' в кодировке UTF-8.")

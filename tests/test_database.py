@@ -3,6 +3,7 @@
 from datetime import datetime
 from decimal import Decimal
 from pathlib import Path
+from typing import IO, Any
 
 import pytest
 from alembic import command
@@ -25,7 +26,10 @@ from src.models.account import AccountType
 from src.models.budget import BudgetLimit
 from src.models.transaction import Transaction, TransactionType
 from src.models.user import User
-from src.repositories.account import SQLAlchemyAccountRepository
+from src.repositories.account import (
+    InMemoryAccountRepository,
+    SQLAlchemyAccountRepository,
+)
 from src.repositories.budget import SQLAlchemyBudgetRepository
 from src.repositories.category import SQLAlchemyCategoryRepository
 from src.repositories.transaction import SQLAlchemyTransactionRepository
@@ -731,6 +735,25 @@ def test_service_requires_category_and_account_validation(
         accounts.archive_account(source, owner + 999999)
 
 
+def test_account_name_length_is_checked_after_trimming(
+    session: Session, records: tuple[int, int, int, int, int]
+) -> None:
+    """Проверяет ограничение названия счета в 100 символов после trim."""
+    owner = records[0]
+    accounts = AccountService(SQLAlchemyAccountRepository(session))
+
+    account = accounts.create_account(owner, "A" * 100, AccountType.CASH, Decimal("0"))
+    assert len(account.name) == 100
+
+    with pytest.raises(ValueError, match="100"):
+        accounts.create_account(owner, "A" * 101, AccountType.CASH, Decimal("0"))
+
+    trimmed = accounts.create_account(
+        owner, " " + "B" * 100 + " ", AccountType.CASH, Decimal("0")
+    )
+    assert trimmed.name == "B" * 100
+
+
 @pytest.mark.parametrize("amount", ["0.005", "1E100", "NaN", "Infinity"])
 def test_money_validation_preserves_transfer_capital(
     session: Session, records: tuple[int, int, int, int, int], amount: str
@@ -1192,6 +1215,68 @@ def test_in_memory_transaction_keyword_arguments() -> None:
     assert repository.get_by_id(transaction_id=saved.id) is None
 
 
+def test_export_preserves_previous_file(
+    session: Session,
+    records: tuple[int, int, int, int, int],
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    """При ошибке записи сохраняет предыдущий CSV-файл."""
+    owner = records[0]
+    monkeypatch.chdir(tmp_path)
+    csv_path = tmp_path / "transactions_export.csv"
+    previous_content = b"previous report\\r\\n"
+    csv_path.write_bytes(previous_content)
+    import tempfile
+
+    original_tempfile = tempfile.NamedTemporaryFile
+
+    class FailingFile:
+        """Временный файл, имитирующий сбой при записи отчёта."""
+
+        def __init__(self, file: IO[str]) -> None:
+            """Сохраняет открытый файл и его путь."""
+            self.file = file
+            self.name = file.name
+
+        def __enter__(self) -> "FailingFile":
+            """Возвращает файл для записи внутри контекста."""
+            return self
+
+        def __exit__(
+            self,
+            exc_type: object,
+            exc_value: object,
+            traceback: object,
+        ) -> None:
+            """Закрывает временный файл даже после ошибки записи."""
+            self.file.close()
+
+        def write(self, data: str) -> None:
+            """Записывает данные и сообщает об ошибке файловой системы."""
+            self.file.write(data)
+            raise OSError("Недостаточно места")
+
+    def failing_tempfile(*args: Any, **kwargs: Any) -> FailingFile:
+        """Оборачивает настоящий временный файл для проверки сбоя записи."""
+        return FailingFile(original_tempfile(*args, **kwargs))
+
+    monkeypatch.setattr(tempfile, "NamedTemporaryFile", failing_tempfile)
+
+    answers = iter(["8", "", "", "", "", "", "0"])
+    monkeypatch.setattr("builtins.input", lambda _: next(answers))
+
+    interface = application.build_interface(session, owner)
+    assert interface.run_once()
+
+    output = capsys.readouterr().out
+    assert "Не удалось записать CSV" in output
+    assert "выгружены" not in output
+    assert csv_path.read_bytes() == previous_content
+    assert list(tmp_path.iterdir()) == [csv_path]
+
+
 @pytest.mark.parametrize("write_failure", [False, True])
 def test_cli_export_handles_file_errors(
     session: Session,
@@ -1202,16 +1287,20 @@ def test_cli_export_handles_file_errors(
     write_failure: bool,
 ) -> None:
     """Ошибка открытия или записи CSV не прерывает работу меню."""
-    from unittest.mock import mock_open
+    import tempfile
 
     owner = records[0]
     monkeypatch.chdir(tmp_path)
     if write_failure:
-        mocked_open = mock_open()
-        mocked_open.return_value.write.side_effect = OSError("Недостаточно места")
-        monkeypatch.setattr("builtins.open", mocked_open)
+
+        def failing_tempfile(*args: Any, **kwargs: Any) -> None:
+            """Имитирует ошибку создания временного файла."""
+            raise OSError("Недостаточно места")
+
+        monkeypatch.setattr(tempfile, "NamedTemporaryFile", failing_tempfile)
     else:
         (tmp_path / "transactions_export.csv").mkdir()
+
     answers = iter(["8", "", "", "", "", "", "0"])
     monkeypatch.setattr("builtins.input", lambda _: next(answers))
     interface = application.build_interface(session, owner)
@@ -1245,3 +1334,75 @@ def test_cli_delete_after_history(
     account = SQLAlchemyAccountRepository(session).get_by_id(source)
     assert account is not None
     assert account.balance == Decimal("990" if empty else "1000")
+
+
+def test_cli_delete_rejects_id_outside_selection(
+    session: Session,
+    records: tuple[int, int, int, int, int],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Запрещает удаление операции, отсутствующей в отфильтрованной истории."""
+    owner, source, _, expense, income = records
+    service = transaction_service(session)
+
+    expense_tx = service.register_transaction(
+        owner, TransactionType.EXPENSE, Decimal("10"), source, expense
+    )
+    income_tx = service.register_transaction(
+        owner, TransactionType.INCOME, Decimal("20"), source, income
+    )
+
+    history_before = service.get_history(owner)
+    assert {tx.id for tx in history_before} == {expense_tx.id, income_tx.id}
+    account = SQLAlchemyAccountRepository(session).get_by_id(source)
+    assert account is not None
+    balance_before = account.balance
+
+    answers = iter(["7", "", "", "", "", "2", str(income_tx.id)])
+    monkeypatch.setattr("builtins.input", lambda _: next(answers))
+
+    application.build_interface(session, owner).run_once()
+
+    history_after = service.get_history(owner)
+    account_after = SQLAlchemyAccountRepository(session).get_by_id(source)
+
+    assert {tx.id for tx in history_after} == {
+        expense_tx.id,
+        income_tx.id,
+    }
+    assert account_after is not None
+    assert account_after.balance == balance_before
+
+
+def test_in_memory_rejects_long_name_without_creating_account() -> None:
+    """Слишком длинное имя отклоняется до добавления счёта в память."""
+    accounts = AccountService(InMemoryAccountRepository())
+    with pytest.raises(ValueError, match="100"):
+        accounts.create_account(1, "А" * 101, AccountType.CASH, Decimal("0"))
+    assert accounts.get_user_accounts(1) == []
+
+
+def test_export_replaces_existing_csv(
+    session: Session,
+    records: tuple[int, int, int, int, int],
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    """Повторный экспорт заменяет старый отчёт и оставляет только готовый CSV."""
+    owner, source, _, expense, _ = records
+    tx = transaction_service(session).register_transaction(
+        owner, TransactionType.EXPENSE, Decimal("12.34"), source, expense
+    )
+    monkeypatch.chdir(tmp_path)
+    csv_path = tmp_path / "transactions_export.csv"
+    csv_path.write_bytes(b"previous report")
+    answers = iter(["8", "", "", "", "", ""])
+    monkeypatch.setattr("builtins.input", lambda _: next(answers))
+
+    assert application.build_interface(session, owner).run_once()
+
+    header, row = csv_path.read_text(encoding="utf-8-sig").splitlines()
+    assert header.startswith("ID;")
+    assert row.split(";")[0] == str(tx.id)
+    assert row.endswith(";12.34")
+    assert list(tmp_path.iterdir()) == [csv_path]
