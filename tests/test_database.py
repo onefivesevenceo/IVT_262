@@ -1132,6 +1132,7 @@ def test_cli_invalid_filters_preserve_csv(
         SQLAlchemyAccountRepository(session)
     ).calculate_total_capital(owner)
     history_before = service.get_history(owner)
+    assert {tx.id for tx in history_before} == {expense_tx.id, income_tx.id}
     filters = ["", "", "", "", ""]
     if invalid_filter == "date":
         filters[0] = "2026-02-30"
@@ -1245,3 +1246,41 @@ def test_cli_delete_after_history(
     account = SQLAlchemyAccountRepository(session).get_by_id(source)
     assert account is not None
     assert account.balance == Decimal("990" if empty else "1000")
+
+
+def test_cli_delete_rejects_id_outside_selection(
+    session: Session,
+    records: tuple[int, int, int, int, int],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Запрещает удаление операции, отсутствующей в отфильтрованной истории."""
+    owner, source, _, expense, income = records
+    service = transaction_service(session)
+
+    expense_tx = service.register_transaction(
+        owner, TransactionType.EXPENSE, Decimal("10"), source, expense
+    )
+    income_tx = service.register_transaction(
+        owner, TransactionType.INCOME, Decimal("20"), source, income
+    )
+
+    history_before = service.get_history(owner)
+    assert {tx.id for tx in history_before} == {expense_tx.id, income_tx.id}
+    account = SQLAlchemyAccountRepository(session).get_by_id(source)
+    assert account is not None
+    balance_before = account.balance
+
+    answers = iter(["7", "", "", "", "", "2", str(income_tx.id)])
+    monkeypatch.setattr("builtins.input", lambda _: next(answers))
+
+    application.build_interface(session, owner).run_once()
+
+    history_after = service.get_history(owner)
+    account_after = SQLAlchemyAccountRepository(session).get_by_id(source)
+
+    assert {tx.id for tx in history_after} == {
+        expense_tx.id,
+        income_tx.id,
+    }
+    assert account_after is not None
+    assert account_after.balance == balance_before
