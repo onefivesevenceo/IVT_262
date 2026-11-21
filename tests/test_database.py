@@ -1192,6 +1192,53 @@ def test_in_memory_transaction_keyword_arguments() -> None:
     assert repository.get_by_id(transaction_id=saved.id) is None
 
 
+def test_export_preserves_previous_file(
+    session: Session,
+    records: tuple[int, int, int, int, int],
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    """При ошибке записи сохраняет предыдущий CSV-файл."""
+    owner = records[0]
+    monkeypatch.chdir(tmp_path)
+    csv_path = tmp_path / "transactions_export.csv"
+    previous_content = b"previous report\\r\\n"
+    csv_path.write_bytes(previous_content)
+    original_open = open
+
+    class FailingFile:
+        def __init__(self, file):
+            self.file = file
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *args):
+            self.file.close()
+
+        def write(self, data):
+            self.file.write(data)
+            raise OSError("Недостаточно места")
+
+    def failing_open(file, mode="r", *args, **kwargs):
+        if Path(file).name == csv_path.name and "w" in mode:
+            return FailingFile(original_open(file, mode, *args, **kwargs))
+        return original_open(file, mode, *args, **kwargs)
+
+    monkeypatch.setattr("builtins.open", failing_open)
+    answers = iter(["8", "", "", "", "", "", "0"])
+    monkeypatch.setattr("builtins.input", lambda _: next(answers))
+
+    interface = application.build_interface(session, owner)
+    assert interface.run_once()
+
+    output = capsys.readouterr().out
+    assert "Не удалось записать CSV" in output
+    assert "выгружены" not in output
+    assert csv_path.read_bytes() == previous_content
+
+
 @pytest.mark.parametrize("write_failure", [False, True])
 def test_cli_export_handles_file_errors(
     session: Session,
