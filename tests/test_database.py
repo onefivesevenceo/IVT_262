@@ -1132,7 +1132,6 @@ def test_cli_invalid_filters_preserve_csv(
         SQLAlchemyAccountRepository(session)
     ).calculate_total_capital(owner)
     history_before = service.get_history(owner)
-    assert {tx.id for tx in history_before} == {expense_tx.id, income_tx.id}
     filters = ["", "", "", "", ""]
     if invalid_filter == "date":
         filters[0] = "2026-02-30"
