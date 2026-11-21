@@ -731,6 +731,25 @@ def test_service_requires_category_and_account_validation(
         accounts.archive_account(source, owner + 999999)
 
 
+def test_account_name_length_is_checked_after_trimming(
+    session: Session, records: tuple[int, int, int, int, int]
+) -> None:
+    """Проверяет ограничение названия счета в 100 символов после trim."""
+    owner = records[0]
+    accounts = AccountService(SQLAlchemyAccountRepository(session))
+
+    account = accounts.create_account(owner, "A" * 100, AccountType.CASH, Decimal("0"))
+    assert len(account.name) == 100
+
+    with pytest.raises(ValueError, match="100"):
+        accounts.create_account(owner, "A" * 101, AccountType.CASH, Decimal("0"))
+
+    trimmed = accounts.create_account(
+        owner, " " + "B" * 100 + " ", AccountType.CASH, Decimal("0")
+    )
+    assert trimmed.name == "B" * 100
+
+
 @pytest.mark.parametrize("amount", ["0.005", "1E100", "NaN", "Infinity"])
 def test_money_validation_preserves_transfer_capital(
     session: Session, records: tuple[int, int, int, int, int], amount: str
