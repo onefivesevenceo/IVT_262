@@ -26,7 +26,10 @@ from src.models.account import AccountType
 from src.models.budget import BudgetLimit
 from src.models.transaction import Transaction, TransactionType
 from src.models.user import User
-from src.repositories.account import SQLAlchemyAccountRepository
+from src.repositories.account import (
+    InMemoryAccountRepository,
+    SQLAlchemyAccountRepository,
+)
 from src.repositories.budget import SQLAlchemyBudgetRepository
 from src.repositories.category import SQLAlchemyCategoryRepository
 from src.repositories.transaction import SQLAlchemyTransactionRepository
@@ -1230,11 +1233,15 @@ def test_export_preserves_previous_file(
     original_tempfile = tempfile.NamedTemporaryFile
 
     class FailingFile:
+        """Временный файл, имитирующий сбой при записи отчёта."""
+
         def __init__(self, file: IO[str]) -> None:
+            """Сохраняет открытый файл и его путь."""
             self.file = file
             self.name = file.name
 
         def __enter__(self) -> "FailingFile":
+            """Возвращает файл для записи внутри контекста."""
             return self
 
         def __exit__(
@@ -1243,13 +1250,16 @@ def test_export_preserves_previous_file(
             exc_value: object,
             traceback: object,
         ) -> None:
+            """Закрывает временный файл даже после ошибки записи."""
             self.file.close()
 
         def write(self, data: str) -> None:
+            """Записывает данные и сообщает об ошибке файловой системы."""
             self.file.write(data)
             raise OSError("Недостаточно места")
 
     def failing_tempfile(*args: Any, **kwargs: Any) -> FailingFile:
+        """Оборачивает настоящий временный файл для проверки сбоя записи."""
         return FailingFile(original_tempfile(*args, **kwargs))
 
     monkeypatch.setattr(tempfile, "NamedTemporaryFile", failing_tempfile)
@@ -1264,6 +1274,7 @@ def test_export_preserves_previous_file(
     assert "Не удалось записать CSV" in output
     assert "выгружены" not in output
     assert csv_path.read_bytes() == previous_content
+    assert list(tmp_path.iterdir()) == [csv_path]
 
 
 @pytest.mark.parametrize("write_failure", [False, True])
@@ -1283,6 +1294,7 @@ def test_cli_export_handles_file_errors(
     if write_failure:
 
         def failing_tempfile(*args: Any, **kwargs: Any) -> None:
+            """Имитирует ошибку создания временного файла."""
             raise OSError("Недостаточно места")
 
         monkeypatch.setattr(tempfile, "NamedTemporaryFile", failing_tempfile)
@@ -1360,3 +1372,37 @@ def test_cli_delete_rejects_id_outside_selection(
     }
     assert account_after is not None
     assert account_after.balance == balance_before
+
+
+def test_in_memory_rejects_long_name_without_creating_account() -> None:
+    """Слишком длинное имя отклоняется до добавления счёта в память."""
+    accounts = AccountService(InMemoryAccountRepository())
+    with pytest.raises(ValueError, match="100"):
+        accounts.create_account(1, "А" * 101, AccountType.CASH, Decimal("0"))
+    assert accounts.get_user_accounts(1) == []
+
+
+def test_export_replaces_existing_csv(
+    session: Session,
+    records: tuple[int, int, int, int, int],
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    """Повторный экспорт заменяет старый отчёт и оставляет только готовый CSV."""
+    owner, source, _, expense, _ = records
+    tx = transaction_service(session).register_transaction(
+        owner, TransactionType.EXPENSE, Decimal("12.34"), source, expense
+    )
+    monkeypatch.chdir(tmp_path)
+    csv_path = tmp_path / "transactions_export.csv"
+    csv_path.write_bytes(b"previous report")
+    answers = iter(["8", "", "", "", "", ""])
+    monkeypatch.setattr("builtins.input", lambda _: next(answers))
+
+    assert application.build_interface(session, owner).run_once()
+
+    header, row = csv_path.read_text(encoding="utf-8-sig").splitlines()
+    assert header.startswith("ID;")
+    assert row.split(";")[0] == str(tx.id)
+    assert row.endswith(";12.34")
+    assert list(tmp_path.iterdir()) == [csv_path]
