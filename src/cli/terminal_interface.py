@@ -1,3 +1,6 @@
+import os
+import tempfile
+from contextlib import suppress
 from datetime import date
 from decimal import Decimal
 from enum import IntEnum
@@ -376,10 +379,26 @@ class TerminalInterface:
 
         csv_data = self._exp_svc.export_to_csv(self._user_id, txs)
         filename = "transactions_export.csv"
+        temp_path = None
         try:
-            with open(filename, "w", encoding="utf-8") as f:
-                f.write(csv_data)
+            with tempfile.NamedTemporaryFile(
+                mode="w",
+                encoding="utf-8",
+                newline="",
+                dir=".",
+                prefix=".transactions_export_",
+                suffix=".tmp",
+                delete=False,
+            ) as file:
+                temp_path = file.name
+                file.write(csv_data)
+            os.replace(temp_path, filename)
+            temp_path = None
         except OSError as error:
             print(f"[!] Не удалось записать CSV: {error}")
             return
+        finally:
+            if temp_path is not None:
+                with suppress(OSError):
+                    os.unlink(temp_path)
         print(f"[OK] Данные выгружены в файл '{filename}' в кодировке UTF-8.")

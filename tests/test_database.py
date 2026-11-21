@@ -1205,11 +1205,14 @@ def test_export_preserves_previous_file(
     csv_path = tmp_path / "transactions_export.csv"
     previous_content = b"previous report\\r\\n"
     csv_path.write_bytes(previous_content)
-    original_open = open
+    import tempfile
+
+    original_tempfile = tempfile.NamedTemporaryFile
 
     class FailingFile:
         def __init__(self, file):
             self.file = file
+            self.name = file.name
 
         def __enter__(self):
             return self
@@ -1221,12 +1224,11 @@ def test_export_preserves_previous_file(
             self.file.write(data)
             raise OSError("Недостаточно места")
 
-    def failing_open(file, mode="r", *args, **kwargs):
-        if Path(file).name == csv_path.name and "w" in mode:
-            return FailingFile(original_open(file, mode, *args, **kwargs))
-        return original_open(file, mode, *args, **kwargs)
+    def failing_tempfile(*args, **kwargs):
+        return FailingFile(original_tempfile(*args, **kwargs))
 
-    monkeypatch.setattr("builtins.open", failing_open)
+    monkeypatch.setattr(tempfile, "NamedTemporaryFile", failing_tempfile)
+
     answers = iter(["8", "", "", "", "", "", "0"])
     monkeypatch.setattr("builtins.input", lambda _: next(answers))
 
@@ -1249,16 +1251,19 @@ def test_cli_export_handles_file_errors(
     write_failure: bool,
 ) -> None:
     """Ошибка открытия или записи CSV не прерывает работу меню."""
-    from unittest.mock import mock_open
+    import tempfile
 
     owner = records[0]
     monkeypatch.chdir(tmp_path)
     if write_failure:
-        mocked_open = mock_open()
-        mocked_open.return_value.write.side_effect = OSError("Недостаточно места")
-        monkeypatch.setattr("builtins.open", mocked_open)
+
+        def failing_tempfile(*args, **kwargs):
+            raise OSError("Недостаточно места")
+
+        monkeypatch.setattr(tempfile, "NamedTemporaryFile", failing_tempfile)
     else:
         (tmp_path / "transactions_export.csv").mkdir()
+
     answers = iter(["8", "", "", "", "", "", "0"])
     monkeypatch.setattr("builtins.input", lambda _: next(answers))
     interface = application.build_interface(session, owner)
