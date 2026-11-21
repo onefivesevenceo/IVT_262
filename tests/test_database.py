@@ -3,6 +3,7 @@
 from datetime import datetime
 from decimal import Decimal
 from pathlib import Path
+from typing import IO, Any
 
 import pytest
 from alembic import command
@@ -1229,21 +1230,26 @@ def test_export_preserves_previous_file(
     original_tempfile = tempfile.NamedTemporaryFile
 
     class FailingFile:
-        def __init__(self, file):
+        def __init__(self, file: IO[str]) -> None:
             self.file = file
             self.name = file.name
 
-        def __enter__(self):
+        def __enter__(self) -> "FailingFile":
             return self
 
-        def __exit__(self, *args):
+        def __exit__(
+            self,
+            exc_type: object,
+            exc_value: object,
+            traceback: object,
+        ) -> None:
             self.file.close()
 
-        def write(self, data):
+        def write(self, data: str) -> None:
             self.file.write(data)
             raise OSError("Недостаточно места")
 
-    def failing_tempfile(*args, **kwargs):
+    def failing_tempfile(*args: Any, **kwargs: Any) -> FailingFile:
         return FailingFile(original_tempfile(*args, **kwargs))
 
     monkeypatch.setattr(tempfile, "NamedTemporaryFile", failing_tempfile)
@@ -1276,7 +1282,7 @@ def test_cli_export_handles_file_errors(
     monkeypatch.chdir(tmp_path)
     if write_failure:
 
-        def failing_tempfile(*args, **kwargs):
+        def failing_tempfile(*args: Any, **kwargs: Any) -> None:
             raise OSError("Недостаточно места")
 
         monkeypatch.setattr(tempfile, "NamedTemporaryFile", failing_tempfile)
